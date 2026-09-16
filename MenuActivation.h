@@ -14,14 +14,20 @@ static void MBAXButtons(AXUIElementRef element, NSMutableArray *result, NSUInteg
     if(!*budget || depth>5)return;
     (*budget)--;
     AXUIElementSetMessagingTimeout(element,0.2);
+    NSString *role=MBAXValue(element,kAXRoleAttribute);
+    // Stop at menus, but allow legacy status controls with AXMenuItem roles.
+    if([role isEqual:(__bridge NSString *)kAXMenuRole])return;
     CFArrayRef actions=NULL;
     AXUIElementCopyActionNames(element,&actions);
     BOOL pressable=actions && (CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXPressAction) || CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXShowMenuAction));
     if(actions)CFRelease(actions);
     // System controls can use host-specific AX roles on macOS 27. The
     // search root is already restricted to menu extras or MenuBarAgent.
-    if(pressable){[result addObject:(__bridge id)element];return;}
+    NSUInteger count=result.count;
     for(id child in MBAXChildren(element))MBAXButtons((__bridge AXUIElementRef)child,result,depth+1,budget);
+    // Host containers can advertise a press as well. Prefer the actual leaf
+    // control: it has the stable identity, title, and menu action.
+    if(pressable && result.count==count)[result addObject:(__bridge id)element];
 }
 static NSArray *MBAXStatusButtons(pid_t pid, BOOL host) {
     if(pid<=0)return @[];
@@ -55,14 +61,19 @@ static NSString *MBAXIdentity(id element) {
     return [parts componentsJoinedByString:@" "];
 }
 static BOOL MBAXSameElement(id a,id b) {return CFEqual((__bridge CFTypeRef)a,(__bridge CFTypeRef)b);}
-static NSArray *MBMenuTargets(NSString *identifier,pid_t pid,NSArray *before) {
+static NSArray *MBMenuTargets(pid_t pid,NSArray *before,NSDictionary *metadata) {
     NSArray *owned=MBAXStatusButtons(pid,NO);
     if(owned.count)return owned;
     NSArray *host=MBHostButtons();
-    NSString *needle=nil;
-    if([identifier isEqual:@"system.battery"])needle=@"com.apple.menuextra.battery";
-    if([identifier isEqual:@"system.spotlight"])needle=@"Spotlight";
-    if(needle){NSMutableArray *matches=[NSMutableArray new];for(id e in host)if([MBAXIdentity(e) rangeOfString:needle options:NSCaseInsensitiveSearch].location!=NSNotFound)[matches addObject:e];if(matches.count)return matches;}
+    NSMutableArray *matches=[NSMutableArray new];
+    for(id element in host){
+        NSString *ax=MBAXValue((__bridge AXUIElementRef)element,CFSTR("AXIdentifier"));BOOL match=NO;
+        for(NSString *expected in metadata[@"axIdentifiers"])if([ax isKindOfClass:NSString.class] && [ax caseInsensitiveCompare:expected]==NSOrderedSame){match=YES;break;}
+        NSString *name=metadata[@"axName"];
+        if(!match && name.length && [MBAXIdentity(element) rangeOfString:name options:NSCaseInsensitiveSearch].location!=NSNotFound)match=YES;
+        if(match)[matches addObject:element];
+    }
+    if(matches.count)return matches;
     // Only this selected item was allowed into the host. An unambiguous new
     // control is a safe fallback for unlabeled Input Method and hosted extras.
     NSMutableArray *added=[NSMutableArray new];

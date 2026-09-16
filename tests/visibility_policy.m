@@ -5,6 +5,11 @@ static void Require(BOOL passed, NSString *message) {
 }
 int main(void) {
     @autoreleasepool {
+        NSMutableArray *runtime=[NSMutableArray new];
+        NSArray *tokens=@[@"battery",@"bluetooth",@"clock",@"displays",@"keyboard",@"volume",@"wifi",@"screenMirroring",@"primaryBentoBox"];
+        for(NSUInteger i=0;i<tokens.count;i++)[runtime addObject:@{@"token":tokens[i],@"raw":@(i)}];
+        NSDictionary *spotlight=@{@"key":@"system.spotlight",@"metadata":@{@"name":@"Spotlight",@"systems":@[],@"bundles":@[@"com.apple.Spotlight",@"com.apple.campo"]}};
+        MBSetSystemItems(MBBuildSystemCatalog(runtime,@[],@[spotlight]));
         NSString *own=@"io.github.iamwrm.MenuBarCompact";
         NSArray *running=@[own,@"com.apple.TextInputMenuAgent",@"com.apple.campo",@"com.apple.Spotlight",@"com.bjango.istatmenus.status",@"example.hidden"];
         NSDictionary *baseline=MBVisibilityPlan(running,@{},own,0);
@@ -48,6 +53,24 @@ int main(void) {
         NSDictionary *appOne=MBVisibilityPlan(running,MBInteractionRules(rules,@"example.hidden"),own,0);
         Require([appOne[@"bundles"] containsObject:@"example.hidden"] && [appOne[@"systems"] isEqual:hidden[@"systems"]],@"Opening one app must preserve hidden system controls");
         Require([rules[@"example.hidden"] isEqual:@1] && [rules[@"system.battery"] isEqual:@1],@"Temporary activation must never change saved rules");
+        [runtime addObject:@{@"token":@"futureWidget",@"raw":@42}];
+        NSArray *plugins=@[@{@"bundle":@"com.apple.menuextra.TimeMachine",@"name":@"Time Machine",@"path":@"/fixture/TimeMachine.menu"},@{@"bundle":@"com.apple.menuextra.NewExtra",@"name":@"New Extra"}];
+        MBSetSystemItems(MBBuildSystemCatalog(runtime,plugins,@[spotlight]));
+        NSDictionary *autoBaseline=MBVisibilityPlan(running,@{},own,0);
+        Require([autoBaseline[@"systems"] containsObject:@42],@"Unknown new runtime category must be allowed without a code change");
+        Require([autoBaseline[@"bundles"] containsObject:@"com.apple.menuextra.TimeMachine"],@"Installed extras must be visible by default even without a separate running app");
+        NSString *tm=@"system.extra.com.apple.menuextra.TimeMachine";
+        NSDictionary *tmHidden=MBVisibilityPlan(running,@{tm:@1},own,0);
+        Require(![tmHidden[@"bundles"] containsObject:@"com.apple.menuextra.TimeMachine"] && [tmHidden[@"systems"] isEqual:autoBaseline[@"systems"]],@"Hiding a discovered plug-in must remove only its bundle");
+        Require([tmHidden[@"bundles"] containsObject:@"com.apple.menuextra.NewExtra"],@"Other discovered extras remain allowed");
+        Require([MBPanelItems(running,@{tm:@1},own,NO) containsObject:tm],@"A hosted menu extra has no separate app PID but must be available in the second row");
+        NSDictionary *future=MBVisibilityPlan(running,@{@"system.futureWidget":@1},own,0);
+        Require(![future[@"systems"] containsObject:@42],@"New categories must be configurable without adding a numeric constant");
+        NSDictionary *orphan=MBVisibilityPlan(running,@{@"system.retiredWidget":@1},own,0);
+        Require(![orphan[@"bundles"] containsObject:@"system.retiredWidget"] && [orphan[@"excluded"] intValue]==0,@"Saved orphan synthetic IDs must never reach the host or hide unrelated items");
+        NSDictionary *protected=MBVisibilityPlan(running,@{@"system.clock":@1,@"system.primaryBentoBox":@2},own,0);
+        Require([protected[@"excluded"] intValue]==0,@"Clock and Control Center remain protected even under saved rules");
+        Require([MBSystemItems()[@"system.input-method"][@"systems"] containsObject:@4],@"Existing Input Method preferences retain their stable key");
         puts("Visibility policy tests passed, including panel filtering and isolated menu activation.");
     }
     return 0;

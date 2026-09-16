@@ -3,6 +3,7 @@
 #import <dlfcn.h>
 #import "VisibilityPolicy.h"
 #import "MenuActivation.h"
+#import "SystemDiscovery.h"
 
 // Narrow macOS 27 runtime interface, reconstructed in our diagnostic project.
 // Runtime lookup lets the app fail open if a future OS removes this API.
@@ -34,7 +35,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 @property NSTask *compatibilityTask;
 @property NSUInteger generation, refreshGeneration;
 @property VisibilityMode mode;
-@property BOOL ready, menuOpen, paused, activationPending;
+@property BOOL ready, menuOpen, paused, activationPending, discoveryReady;
 @property NSString *stateMessage, *compatibilityMessage;
 @property NSURL *logURL;
 @property NSPopover *overflow;
@@ -54,6 +55,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(file){[file seekToEndOfFile];[file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];[file closeFile];}
 }
 - (BOOL)protectedID:(NSString *)identifier {
+    if(MBSystemItems()[identifier])return [MBSystemItems()[identifier][@"protected"] boolValue];
     return MBProtectedBundle(identifier,OwnID);
 }
 - (void)saveRules {
@@ -89,6 +91,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         }
     }
     [prefs registerDefaults:@{@"AutoRehide":@YES}];
+    [self discoverSystemItems:nil];
     BOOL first=[prefs objectForKey:@"VisibilityRules"]==nil;
     self.rules=[[prefs dictionaryForKey:@"VisibilityRules"] mutableCopy]?:[NSMutableDictionary new];
     self.names=[[prefs dictionaryForKey:@"AppNames"] mutableCopy]?:[NSMutableDictionary new];
@@ -121,7 +124,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.4.1"];
+    [self log:@"START MenuBarCompact 0.5.0"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -134,7 +137,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     });
 }
 - (void)suspend:(NSNotification *)note {self.paused=YES;[self releaseRestriction];}
-- (void)maintain:(id)sender {[self refreshApps];[self checkCompatibility:nil];}
+- (void)maintain:(id)sender {[self discoverSystemItems:nil];[self refreshApps];[self checkCompatibility:nil];}
 - (void)pollApps:(id)sender {
     NSMutableDictionary *latest=[NSMutableDictionary new], *previous=[NSMutableDictionary new];
     for(NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications)if(app.bundleIdentifier.length && !app.terminated)latest[app.bundleIdentifier]=@(app.processIdentifier);
@@ -147,6 +150,15 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         if(app.bundleIdentifier.length && !app.terminated){running[app.bundleIdentifier]=app;if(app.localizedName.length)self.names[app.bundleIdentifier]=app.localizedName;}
     }
     self.running=running;[self rebuildRows];
+}
+- (void)discoverSystemItems:(id)sender {
+    NSDictionary *catalog=MBDiscoverSystemItems();self.discoveryReady=catalog.count>0;
+    if(!catalog){[self log:@"DISCOVERY unavailable — hiding paused"];[self applyVisibility];return;}
+    if(![catalog isEqual:MBSystemItems()]){
+        MBSetSystemItems(catalog);
+        [self log:[NSString stringWithFormat:@"DISCOVERY %lu system items (%lu runtime categories)",(unsigned long)catalog.count,(unsigned long)MBSystemCategoryIDs().count]];
+    }
+    if(self.rules)[self rebuildRows];if(self.ready)[self applyVisibility];
 }
 - (void)rebuildRows {
     NSMutableSet *ids=[NSMutableSet setWithArray:self.rules.allKeys];
@@ -163,9 +175,10 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         if([identifier isEqual:IStatID])name=@"iStat Menus";
         if(MBSystemItems()[identifier])name=MBSystemItems()[identifier][@"name"];
         if(query.length && [name rangeOfString:query options:NSCaseInsensitiveSearch].location==NSNotFound && [identifier rangeOfString:query options:NSCaseInsensitiveSearch].location==NSNotFound)continue;
-        [rows addObject:@{@"id":identifier,@"name":name?:identifier}];
+        [rows addObject:@{@"id":identifier,@"name":name?:identifier,@"running":@(self.running[identifier]!=nil),@"rule":self.rules[identifier]?:@0,@"system":MBSystemItems()[identifier]?:@{}}];
     }
-    self.rows=[rows sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
+    NSArray *sorted=[rows sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
+    if([sorted isEqual:self.rows])return;self.rows=sorted;
     [self.table reloadData];
 }
 - (void)releaseRestriction {
@@ -175,6 +188,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 }
 - (void)applyVisibility {
     if(self.paused)return;
+    if(!self.discoveryReady){[self releaseRestriction];self.stateMessage=@"System item discovery unavailable; hiding is paused";[self updateUI];return;}
     if(self.running[ThawID]){[self releaseRestriction];self.stateMessage=@"Paused while Thaw is running";[self updateUI];return;}
     if(!self.ready){[self releaseRestriction];self.stateMessage=@"Waiting for iStat compatibility";[self updateUI];return;}
     NSDictionary *effectiveRules=MBInteractionRules(self.rules,self.activeItem);
@@ -242,7 +256,11 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 }
 - (NSImage *)rowIconForIdentifier:(NSString *)identifier name:(NSString *)name {
     NSDictionary *system=MBSystemItems()[identifier];
-    if(system)return [NSImage imageWithSystemSymbolName:system[@"symbol"] accessibilityDescription:name];
+    if(system){
+        NSBundle *plugin=[system[@"bundlePath"] length]?[NSBundle bundleWithPath:system[@"bundlePath"]]:nil;
+        for(NSString *resource in @[@"MenuBarIcon",@"menu",@"StatusBarIcon"]){NSImage *image=[plugin imageForResource:resource];if(image){image=[image copy];image.template=YES;return image;}}
+        return [NSImage imageWithSystemSymbolName:system[@"symbol"] accessibilityDescription:name]?:[NSImage imageWithSystemSymbolName:@"menubar.rectangle" accessibilityDescription:name];
+    }
     // Read artwork from the installed app without loading its executable.
     // These are representative glyphs, not live status snapshots.
     NSURL *bundleURL=self.running[identifier].bundleURL;
@@ -303,9 +321,11 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         return;
     }
     NSString *identifier=sender.identifier;
+    NSDictionary *systemMetadata=MBSystemItems()[identifier];
     [self finishInteraction];[self.rehideTimer invalidate];
     NSUInteger revision=self.interactionGeneration;
     pid_t pid=self.running[identifier].processIdentifier;
+    if([systemMetadata[@"hostBundle"] length])pid=self.running[systemMetadata[@"hostBundle"]].processIdentifier;
     if([identifier isEqual:@"system.input-method"])pid=self.running[@"com.apple.TextInputMenuAgent"].processIdentifier;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         NSArray *before=MBHostButtons();
@@ -314,12 +334,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
             self.activeItem=identifier;[self applyVisibility];
             [self.overflow performClose:nil];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,700*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-                NSArray *targets=MBMenuTargets(identifier,pid,before);
+                NSArray *targets=MBMenuTargets(pid,before,systemMetadata);
                 // Hosted controls can arrive after the allowlist completion.
                 // Retry discovery only; never repeat a press that may succeed.
                 for(NSUInteger attempt=0;!targets.count && attempt<10;attempt++){
                     [NSThread sleepForTimeInterval:0.15];
-                    targets=MBMenuTargets(identifier,pid,before);
+                    targets=MBMenuTargets(pid,before,systemMetadata);
                 }
                 if(!targets.count){NSMutableArray *identities=[NSMutableArray new];for(id item in MBHostButtons())[identities addObject:MBAXIdentity(item)];[self log:[NSString stringWithFormat:@"MENU discovery %@ host=%@",identifier,identities]];}
                 dispatch_async(dispatch_get_main_queue(),^{
@@ -440,8 +460,9 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.compatibilityLabel=[self label:@"" frame:NSMakeRect(28,60,760,22) size:12 secondary:YES];
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
-    [self label:@"MenuBarCompact 0.4 · second menu row" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
-    [self.window center];[self rebuildRows];[self updateUI];
+    [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
+    [self label:@"MenuBarCompact 0.5 · automatic discovery" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self.window center];[self rebuildRows];[self.table reloadData];[self updateUI];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)visible {if(!self.overflow.shown)[self showSettings:nil];return YES;}
@@ -458,7 +479,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     NSView *view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,440,54)];
     NSImageView *icon=[[NSImageView alloc] initWithFrame:NSMakeRect(8,11,30,30)];icon.image=system?[NSImage imageWithSystemSymbolName:system[@"symbol"] accessibilityDescription:system[@"name"]]:(self.running[identifier].icon?:[NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:nil]);[view addSubview:icon];
     NSTextField *name=[NSTextField labelWithString:row[@"name"]];name.frame=NSMakeRect(48,28,385,20);name.font=[NSFont systemFontOfSize:13 weight:NSFontWeightMedium];[view addSubview:name];
-    NSTextField *bundle=[NSTextField labelWithString:system?@"System menu item":identifier];bundle.frame=NSMakeRect(48,8,385,18);bundle.font=[NSFont systemFontOfSize:10];bundle.textColor=NSColor.secondaryLabelColor;bundle.lineBreakMode=NSLineBreakByTruncatingMiddle;[view addSubview:bundle];return view;
+    NSTextField *bundle=[NSTextField labelWithString:system?[NSString stringWithFormat:@"%@%@",system[@"source"]?:@"System menu item",[system[@"protected"] boolValue]?@" · kept visible":@""]:identifier];bundle.frame=NSMakeRect(48,8,385,18);bundle.font=[NSFont systemFontOfSize:10];bundle.textColor=NSColor.secondaryLabelColor;bundle.lineBreakMode=NSLineBreakByTruncatingMiddle;[view addSubview:bundle];return view;
 }
 - (void)ruleChanged:(NSPopUpButton *)sender {
     if([self protectedID:sender.identifier])return;

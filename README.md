@@ -7,7 +7,8 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 ## Features
 
 - **Always show**, **Hide**, and **Always hide** rules for application bundles.
-- The same visibility choices for **Battery**, **Input Method**, and **Spotlight**.
+- Automatic discovery of macOS system categories and installed menu extras, including **Time Machine**, with persistent visibility rules.
+- System items rescan at startup, once a minute, and through **Rescan system items**.
 - Click the menu-bar button to open a shallow second row of icons beneath it; Option-click includes Always hide.
 - Optional automatic panel closing after 15 seconds.
 - Searchable settings, with an option to show all running apps.
@@ -59,9 +60,15 @@ If an app exposes multiple status controls or no identifiable control, the panel
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
-Settings initially shows configured apps and iStat. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
+Settings initially shows configured apps, iStat, and discovered system items. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
 
-Battery, Input Method, and Spotlight always appear in Settings, including when hidden. They default to Always show until configured. iStat and the remaining macOS system items are protected from hiding.
+System discovery reads the OS’s `MBSystemItemIdentifier.allCases` and string names, then scans `/System/Library/CoreServices/Menu Extras/*.menu` metadata. Category numbers and the list of plug-ins are not hard-coded. The tested macOS build exposes nine categories and eight additional menu extras; Spotlight’s existing compatibility adapter supplies one more entry. A few display-name, icon, protected-item, and compatibility mappings remain intentional.
+
+Discovered items stay listed while hidden, and new items default to Always show. Clock, Control Center, and iStat remain protected. Always show permits an item that macOS has enabled; it does not enable an inactive item in System Settings. Installed legacy extras can therefore be listed even when their controls are inactive.
+
+The allowlist includes all discovered plug-in bundle IDs by default, preventing discovery omissions from suppressing them. Existing Battery, Input Method, and Spotlight rule keys remain unchanged. Unknown retired synthetic keys never enter the app allowlist. If runtime enumeration fails, the app releases its visibility restriction rather than applying guessed category IDs.
+
+Discovery covers the published category API and installed `.menu` bundles, not every possible Control Center gallery module. Adding other module families can still require a separate discovery/control adapter. Discovering an item is not proof that its native menu supports external activation. A uniquely loaded legacy extra can use SystemUIServer’s menu control; ambiguous hosts fail without pressing an arbitrary menu.
 
 System-item rules are temporary visibility restrictions: they do not change the selected input source, disable Spotlight search, or edit macOS's menu-bar preferences. Battery uses its system category; Input Method uses the keyboard category and input-menu agent; Spotlight handles both known host app identities. The panel can list these controls while they remain hidden in the main bar.
 
@@ -93,6 +100,9 @@ Inactive copies and backups are retained. Restoring the original helper location
 
 - `main.m`: native UI, persisted rules, menu-bar control, lifecycle handling, and login registration.
 - `VisibilityPolicy.h`: app/system allowlists, panel filtering, and isolated temporary menu visibility.
+- `SystemDiscovery.swift`: runtime enumeration of system category IDs and names.
+- `SystemDiscovery.h`: installed menu-extra and legacy-host discovery.
+- `SystemCatalog.h`: stable preference keys, category/plugin metadata, names, and symbols.
 - `MenuActivation.h`: bounded Accessibility discovery and menu activation.
 - `istat_workaround.py`: compatibility detection, installation, status, rollback, and legacy-state migration.
 - `tests/test_workaround.py`: isolated tests that do not modify real applications or launch services.
@@ -101,17 +111,17 @@ Inactive copies and backups are retained. Restoring the original helper location
 ./tests/run.sh
 ```
 
-Local validation covered hiding/revealing with iStat retained, rule persistence, quitting/relaunching, conflict handling with Thaw, and opening the overflow panel while keeping the main bar compact. Live checks confirmed original Box, Lungo, Battery, and Input Method menus after replacing a stale Accessibility entry. Permission remained valid across subsequent certificate-signed updates. Spotlight discovery and fallback event delivery were checked, but its search interface did not appear; a direct click on its original icon had the same result on this macOS build. Spotlight launch therefore remains unverified. Menu-bar presence was checked through macOS accessibility; that does not verify every rendered meter or interaction. An actual logout/login, sleep/wake cycle, and multiple-display behavior have not been comprehensively tested.
+Local validation covered hiding/revealing with iStat retained, rule persistence, quitting/relaunching, conflict handling with Thaw, and opening the overflow panel while keeping the main bar compact. Live checks confirmed original Box, Lungo, Battery, Input Method, and discovered Time Machine menus after replacing a stale Accessibility entry. Permission remained valid across subsequent certificate-signed updates. Spotlight discovery and fallback event delivery were checked, but its search interface did not appear; a direct click on its original icon had the same result on this macOS build. Spotlight launch therefore remains unverified. Menu-bar presence was checked through macOS accessibility; that does not verify every rendered meter or interaction. An actual logout/login, sleep/wake cycle, and multiple-display behavior have not been comprehensively tested.
 
 The compatibility tests cover unchanged copies, executable updates, resource-only updates, absent installations, unexpected helper paths, rollback preservation, and legacy migration.
 
-Native visibility-policy tests also cover system-only activation, independent Battery changes, Input Method and Spotlight identities, protected items, both legacy reveal modes, panel filtering, and temporary visibility limited to the selected item. Battery and Spotlight hide/reveal behavior was checked live on macOS 27; the input-menu control is unlabeled in the host's accessibility tree, limiting automated identification.
+Discovery tests cover runtime enumeration, an unknown future category with a nonsequential numeric ID, new plug-ins, default visibility, old preference keys, protected items, and obsolete synthetic IDs. Native visibility-policy tests also cover system-only activation, independent Battery changes, Input Method and Spotlight identities, protected items, both legacy reveal modes, panel filtering, and temporary visibility limited to the selected item. Battery and Spotlight hide/reveal behavior was checked live on macOS 27; the input-menu control is unlabeled in the host's accessibility tree, limiting automated identification.
 
 Logs stay local at `~/Library/Application Support/MenuBarCompact/events.log`. Preferences use `io.github.iamwrm.MenuBarCompact`. Local logs, screenshots, build products, and user settings are excluded from the repository. There is no telemetry or network service.
 
 ## Current limitations
 
-Third-party visibility is per app bundle, not per individual icon. The three supported system controls have separate rules. Drag-to-reorder layouts, hover/scroll reveal, and global hotkeys are not implemented. Panel icons represent apps, not live meter contents. Menu activation depends on each app’s Accessibility support; native menus retain their original location and are not embedded in the panel. The one temporarily revealed item may still overflow a crowded or notched menu bar.
+Third-party visibility is per app bundle, not per individual icon. Discovered system categories and menu extras have separate rules. Per-item hiding of every legacy plug-in has not been visually verified. Drag-to-reorder layouts, hover/scroll reveal, and global hotkeys are not implemented. Panel icons represent apps, not live meter contents. Menu activation depends on each app’s Accessibility support; native menus retain their original location and are not embedded in the panel. The one temporarily revealed item may still overflow a crowded or notched menu bar.
 
 The menu-bar API is loaded dynamically and checked at runtime. The implementation does not require a private entitlement or changes to OS security settings. There is no dependency on Thaw's binary or source code.
 
