@@ -2,6 +2,7 @@
 #import <ServiceManagement/ServiceManagement.h>
 #import <dlfcn.h>
 #import "VisibilityPolicy.h"
+#import "MenuActivation.h"
 
 // Narrow macOS 27 runtime interface, reconstructed in our diagnostic project.
 // Runtime lookup lets the app fail open if a future OS removes this API.
@@ -16,7 +17,7 @@ static NSString *const OwnID = @"io.github.iamwrm.MenuBarCompact";
 static NSString *const ThawID = @"com.stonerl.Thaw";
 static NSString *const IStatID = @"com.bjango.istatmenus.status";
 
-@interface MenuBarCompact : NSObject <NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate>
+@interface MenuBarCompact : NSObject <NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSPopoverDelegate>
 @property NSStatusItem *statusItem;
 @property NSWindow *window;
 @property NSTextField *summaryLabel, *compatibilityLabel, *loginLabel;
@@ -36,6 +37,15 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 @property BOOL ready, menuOpen, paused, activationPending;
 @property NSString *stateMessage, *compatibilityMessage;
 @property NSURL *logURL;
+@property NSPopover *overflow;
+@property NSTextField *overflowMessage;
+@property NSButton *accessButton;
+@property BOOL includeAlwaysHidden;
+@property NSString *activeItem;
+@property NSTimer *interactionTimer;
+@property NSUInteger interactionGeneration;
+@property id outsideMonitor;
+
 @end
 
 @implementation MenuBarCompact
@@ -113,7 +123,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.2.0"];
+    [self log:@"START MenuBarCompact 0.3.0"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -169,7 +179,8 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(self.paused)return;
     if(self.running[ThawID]){[self releaseRestriction];self.stateMessage=@"Paused while Thaw is running";[self updateUI];return;}
     if(!self.ready){[self releaseRestriction];self.stateMessage=@"Waiting for iStat compatibility";[self updateUI];return;}
-    NSDictionary *plan=MBVisibilityPlan(self.running.allKeys,self.rules,OwnID,self.mode);
+    NSDictionary *effectiveRules=MBInteractionRules(self.rules,self.activeItem);
+    NSDictionary *plan=MBVisibilityPlan(self.running.allKeys,effectiveRules,OwnID,Collapsed);
     NSUInteger excluded=[plan[@"excluded"] unsignedIntegerValue];
     NSArray *systems=plan[@"systems"];
     if(self.mode==Everything || excluded==0){[self releaseRestriction];self.stateMessage=self.mode==Everything?@"Showing all items":@"All configured items are visible";[self updateUI];return;}
@@ -206,28 +217,117 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     } @catch(NSException *exception){[self releaseRestriction];self.stateMessage=@"Hiding is unavailable; all items remain visible";[self log:exception.reason];}
     [self updateUI];
 }
-- (void)setModeAndApply:(VisibilityMode)mode {
-    self.mode=mode;[self.rehideTimer invalidate];self.rehideTimer=nil;
-    if(mode!=Collapsed && [NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]){
-        self.rehideTimer=[NSTimer timerWithTimeInterval:15 target:self selector:@selector(autoRehide:) userInfo:nil repeats:NO];
+- (void)finishInteraction {
+    self.interactionGeneration++;
+    [self.interactionTimer invalidate];self.interactionTimer=nil;
+    if(self.outsideMonitor){[NSEvent removeMonitor:self.outsideMonitor];self.outsideMonitor=nil;}
+    if(self.activeItem){self.activeItem=nil;[self applyVisibility];}
+}
+- (void)schedulePanelClose {
+    [self.rehideTimer invalidate];self.rehideTimer=nil;
+    if(self.overflow.shown && [NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]){
+        self.rehideTimer=[NSTimer timerWithTimeInterval:15 target:self selector:@selector(hide:) userInfo:nil repeats:NO];
         [NSRunLoop.mainRunLoop addTimer:self.rehideTimer forMode:NSRunLoopCommonModes];
     }
-    [self applyVisibility];
 }
-- (void)autoRehide:(id)sender {
-    if(self.menuOpen){self.rehideTimer=[NSTimer scheduledTimerWithTimeInterval:3 target:self selector:@selector(autoRehide:) userInfo:nil repeats:NO];return;}
-    [self setModeAndApply:Collapsed];
+- (void)toggle:(id)sender {
+    if(self.overflow.shown){[self hide:nil];return;}
+    [self openOverflowIncludingAlwaysHidden:NO];
 }
-- (void)toggle:(id)sender {[self setModeAndApply:self.mode==Collapsed?Revealed:Collapsed];}
-- (void)showAll:(id)sender {[self setModeAndApply:Everything];}
-- (void)hide:(id)sender {[self setModeAndApply:Collapsed];}
+- (void)showAll:(id)sender {[self openOverflowIncludingAlwaysHidden:YES];}
+- (void)hide:(id)sender {[self.overflow performClose:nil];[self.rehideTimer invalidate];self.rehideTimer=nil;[self finishInteraction];[self updateUI];}
+- (void)popoverDidClose:(NSNotification *)note {[self.rehideTimer invalidate];self.rehideTimer=nil;[self updateUI];}
+- (void)includeAlways:(NSButton *)sender {[self openOverflowIncludingAlwaysHidden:sender.state==NSControlStateValueOn];}
+- (void)requestMenuAccess:(id)sender {
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{(__bridge NSString *)kAXTrustedCheckOptionPrompt:@YES});
+    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]];
+}
+- (void)openOverflowIncludingAlwaysHidden:(BOOL)all {
+    [self finishInteraction];
+    self.mode=Collapsed;[self applyVisibility];self.includeAlwaysHidden=all;
+    NSMutableArray *items=[NSMutableArray new];
+    for(NSString *identifier in MBPanelItems(self.running.allKeys,self.rules,OwnID,all)){
+        NSDictionary *system=MBSystemItems()[identifier];
+        NSString *name=system[@"name"]?:self.names[identifier]?:identifier;
+        NSImage *icon=system?[NSImage imageWithSystemSymbolName:system[@"symbol"] accessibilityDescription:name]:self.running[identifier].icon;
+        icon=[(icon?:[NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:name]) copy];icon.size=NSMakeSize(32,32);
+        [items addObject:@{@"id":identifier,@"name":name,@"icon":icon}];
+    }
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
+    NSUInteger columns=MIN(7,MAX(5,items.count));
+    CGFloat width=columns*72+32,height=MAX(1,(items.count+columns-1)/columns)*78+104;
+    NSViewController *controller=[NSViewController new];controller.view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,width,height)];
+    NSTextField *title=[NSTextField labelWithString:@"Hidden icons"];title.font=[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];title.frame=NSMakeRect(16,height-32,140,20);[controller.view addSubview:title];
+    NSButton *more=[NSButton checkboxWithTitle:@"Include always hidden" target:self action:@selector(includeAlways:)];more.frame=NSMakeRect(width-205,height-33,190,22);more.font=[NSFont systemFontOfSize:11];more.state=all?1:0;[controller.view addSubview:more];
+    NSUInteger index=0;
+    for(NSDictionary *item in items){
+        NSButton *button=[NSButton buttonWithTitle:item[@"name"] image:item[@"icon"] target:self action:@selector(openHiddenMenu:)];
+        button.identifier=item[@"id"];button.imagePosition=NSImageAbove;button.imageScaling=NSImageScaleProportionallyDown;button.bezelStyle=NSBezelStyleRegularSquare;button.bordered=NO;
+        button.font=[NSFont systemFontOfSize:10];button.lineBreakMode=NSLineBreakByTruncatingTail;button.toolTip=item[@"name"];button.accessibilityLabel=[@"Open menu for " stringByAppendingString:item[@"name"]];
+        button.frame=NSMakeRect(16+(index%columns)*72,height-116-(index/columns)*78,64,70);[controller.view addSubview:button];index++;
+    }
+    if(!items.count){NSTextField *empty=[NSTextField labelWithString:@"No running hidden items"];empty.frame=NSMakeRect(16,82,width-32,22);[controller.view addSubview:empty];}
+    self.overflowMessage=[NSTextField wrappingLabelWithString:AXIsProcessTrusted()?@"Choose an icon to open its menu.":@"Allow Accessibility to open the original menus."];
+    self.overflowMessage.frame=NSMakeRect(16,36,width-32,30);self.overflowMessage.font=[NSFont systemFontOfSize:11];self.overflowMessage.textColor=NSColor.secondaryLabelColor;[controller.view addSubview:self.overflowMessage];
+    self.accessButton=[NSButton buttonWithTitle:@"Allow menu access…" target:self action:@selector(requestMenuAccess:)];self.accessButton.frame=NSMakeRect(12,7,170,26);self.accessButton.hidden=AXIsProcessTrusted();[controller.view addSubview:self.accessButton];
+    NSButton *settings=[NSButton buttonWithTitle:@"Settings…" target:self action:@selector(showSettings:)];settings.frame=NSMakeRect(width-110,7,100,26);[controller.view addSubview:settings];
+    if(!self.overflow){self.overflow=[NSPopover new];self.overflow.behavior=NSPopoverBehaviorTransient;self.overflow.delegate=self;}
+    self.overflow.contentViewController=controller;self.overflow.contentSize=NSMakeSize(width,height);
+    if(!self.overflow.shown)[self.overflow showRelativeToRect:self.statusItem.button.bounds ofView:self.statusItem.button preferredEdge:NSRectEdgeMinY];
+    [NSApp activateIgnoringOtherApps:YES];[self.overflow.contentViewController.view.window makeKeyWindow];
+    [self schedulePanelClose];[self updateUI];[self log:[NSString stringWithFormat:@"PANEL open items=%lu; main bar remains collapsed; Accessibility=%@",(unsigned long)items.count,AXIsProcessTrusted()?@"allowed":@"needed"]];
+}
+- (void)openHiddenMenu:(NSButton *)sender {
+    if(!AXIsProcessTrusted()){
+        self.overflowMessage.stringValue=@"Enable MenuBarCompact in Accessibility, then click this icon again.";self.accessButton.hidden=NO;[self.rehideTimer invalidate];return;
+    }
+    NSString *identifier=sender.identifier;
+    [self finishInteraction];[self.rehideTimer invalidate];
+    self.overflowMessage.stringValue=@"Opening menu…";
+    NSUInteger revision=self.interactionGeneration;
+    pid_t pid=self.running[identifier].processIdentifier;
+    if([identifier isEqual:@"system.input-method"])pid=self.running[@"com.apple.TextInputMenuAgent"].processIdentifier;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        NSArray *before=MBHostButtons();
+        dispatch_async(dispatch_get_main_queue(),^{
+            if(revision!=self.interactionGeneration)return;
+            self.activeItem=identifier;[self applyVisibility];
+            [self.overflow performClose:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,350*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                NSArray *targets=MBMenuTargets(identifier,pid,before);
+                dispatch_async(dispatch_get_main_queue(),^{
+                    if(revision!=self.interactionGeneration)return;
+                    if(targets.count!=1){
+                        [self finishInteraction];[self openOverflowIncludingAlwaysHidden:self.includeAlwaysHidden];
+                        self.overflowMessage.stringValue=targets.count?@"This app has multiple menu items; direct selection is not available yet.":@"This app did not expose a menu control. Its icon remains hidden.";
+                        [self.rehideTimer invalidate];[self log:[NSString stringWithFormat:@"MENU unresolved %@ candidates=%lu",identifier,(unsigned long)targets.count]];return;
+                    }
+                    [self log:[NSString stringWithFormat:@"MENU activating %@; only this item is temporarily visible",identifier]];
+                    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                        AXError result=MBPressMenuTarget(targets.firstObject);
+                        dispatch_async(dispatch_get_main_queue(),^{
+                            if(revision!=self.interactionGeneration)return;
+                            [self log:[NSString stringWithFormat:@"MENU AX result=%d for %@",result,identifier]];
+                            if(result!=kAXErrorSuccess && result!=kAXErrorCannotComplete){
+                                [self finishInteraction];[self openOverflowIncludingAlwaysHidden:self.includeAlwaysHidden];self.overflowMessage.stringValue=@"The app declined the menu request.";return;
+                            }
+                            self.interactionTimer=[NSTimer scheduledTimerWithTimeInterval:30 repeats:NO block:^(NSTimer *timer){[self finishInteraction];}];
+                            self.outsideMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp|NSEventMaskRightMouseUp|NSEventMaskKeyDown handler:^(NSEvent *event){
+                                if(event.type==NSEventTypeKeyDown && event.keyCode!=53)return;
+                                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,400*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(revision==self.interactionGeneration)[self finishInteraction];});
+                            }];
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
 - (void)statusClick:(id)sender {
     NSEvent *event=NSApp.currentEvent;
     if(event.type==NSEventTypeRightMouseUp){
         NSMenu *menu=[NSMenu new];menu.delegate=self;
-        NSMenuItem *state=[menu addItemWithTitle:self.stateMessage?:@"MenuBarCompact" action:nil keyEquivalent:@""];state.enabled=NO;
-        [menu addItem:NSMenuItem.separatorItem];
-        for(NSArray *entry in @[@[self.mode==Collapsed?@"Show hidden items":@"Hide items again",NSStringFromSelector(@selector(toggle:))],@[@"Show everything",NSStringFromSelector(@selector(showAll:))],@[@"Settings…",NSStringFromSelector(@selector(showSettings:))]]){
+        for(NSArray *entry in @[@[@"Hidden icons…",NSStringFromSelector(@selector(toggle:))],@[@"All hidden icons…",NSStringFromSelector(@selector(showAll:))],@[@"Settings…",NSStringFromSelector(@selector(showSettings:))]]){
             NSMenuItem *item=[menu addItemWithTitle:entry[0] action:NSSelectorFromString(entry[1]) keyEquivalent:@""];item.target=self;
         }
         [menu addItem:NSMenuItem.separatorItem];[menu addItemWithTitle:@"Quit MenuBarCompact" action:@selector(terminate:) keyEquivalent:@"q"];
@@ -266,7 +366,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 - (void)toggleLogin:(NSButton *)sender {[self setLoginEnabled:sender.state==NSControlStateValueOn];}
 - (void)toggleAutoHide:(NSButton *)sender {
     [NSUserDefaults.standardUserDefaults setBool:sender.state==NSControlStateValueOn forKey:@"AutoRehide"];
-    [self setModeAndApply:self.mode];
+    [self schedulePanelClose];
 }
 - (void)takeOver:(id)sender {
     [self.running[ThawID] terminate];self.stateMessage=@"Waiting for Thaw to quit…";[self updateUI];
@@ -277,10 +377,10 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.summaryLabel.stringValue=self.stateMessage?:@"Starting…";
     self.compatibilityLabel.stringValue=self.compatibilityMessage?:@"Checking iStat…";
     self.takeOverButton.hidden=self.running[ThawID]==nil;
-    self.toggleButton.title=self.mode==Collapsed?@"Show hidden items":@"Hide items again";
-    NSImage *image=[NSImage imageWithSystemSymbolName:self.mode==Collapsed?@"ellipsis.circle":@"chevron.left.circle" accessibilityDescription:@"MenuBarCompact"];
+    self.toggleButton.title=self.overflow.shown?@"Close hidden panel":@"Open hidden panel";
+    NSImage *image=[NSImage imageWithSystemSymbolName:self.overflow.shown?@"ellipsis.circle.fill":@"ellipsis.circle" accessibilityDescription:@"MenuBarCompact"];
     image.template=YES;self.statusItem.button.image=image;
-    self.statusItem.button.toolTip=[NSString stringWithFormat:@"MenuBarCompact — %@\nClick to reveal/hide. Right-click for settings. Option-click shows everything.",self.stateMessage?:@""];
+    self.statusItem.button.toolTip=[NSString stringWithFormat:@"MenuBarCompact — %@\nClick for hidden icons below the menu bar. Right-click for settings. Option-click includes always-hidden icons.",self.stateMessage?:@""];
     SMAppServiceStatus status=SMAppService.mainAppService.status;
     self.loginButton.state=(status==SMAppServiceStatusEnabled || status==SMAppServiceStatusRequiresApproval)?NSControlStateValueOn:NSControlStateValueOff;
     self.loginLabel.stringValue=status==SMAppServiceStatusEnabled?@"Starts automatically when you sign in":(status==SMAppServiceStatusRequiresApproval?@"Allow MenuBarCompact in System Settings → Login Items":@"Open MenuBarCompact when you want to use it");
@@ -297,8 +397,8 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.window.title=@"MenuBarCompact";self.window.releasedWhenClosed=NO;
     NSTextField *title=[self label:@"A quieter menu bar." frame:NSMakeRect(28,615,740,35) size:26 secondary:NO];title.font=[NSFont systemFontOfSize:26 weight:NSFontWeightSemibold];
     self.summaryLabel=[self label:@"Starting…" frame:NSMakeRect(28,585,740,24) size:14 secondary:YES];
-    self.toggleButton=[self button:@"Show hidden items" action:@selector(toggle:) frame:NSMakeRect(24,540,180,32)];
-    [self button:@"Show everything" action:@selector(showAll:) frame:NSMakeRect(210,540,160,32)];
+    self.toggleButton=[self button:@"Open hidden panel" action:@selector(toggle:) frame:NSMakeRect(24,540,180,32)];
+    [self button:@"All hidden icons" action:@selector(showAll:) frame:NSMakeRect(210,540,160,32)];
     self.takeOverButton=[self button:@"Quit Thaw and start" action:@selector(takeOver:) frame:NSMakeRect(585,540,210,32)];
     self.search=[[NSSearchField alloc] initWithFrame:NSMakeRect(28,493,530,30)];self.search.placeholderString=@"Find a configured item";self.search.delegate=self;[self.window.contentView addSubview:self.search];
     self.allAppsButton=[NSButton checkboxWithTitle:@"Show all running apps" target:self action:@selector(toggleAppScope:)];self.allAppsButton.frame=NSMakeRect(580,496,214,24);[self.window.contentView addSubview:self.allAppsButton];
@@ -306,18 +406,18 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.table=[[NSTableView alloc] initWithFrame:scroll.bounds];self.table.delegate=self;self.table.dataSource=self;self.table.rowHeight=54;self.table.usesAlternatingRowBackgroundColors=YES;self.table.selectionHighlightStyle=NSTableViewSelectionHighlightStyleNone;
     for(NSArray *spec in @[@[@"app",@"Item",@450],@[@"running",@"Status",@85],@[@"rule",@"Visibility",@205]]){NSTableColumn *column=[[NSTableColumn alloc] initWithIdentifier:spec[0]];column.title=spec[1];column.width=[spec[2] doubleValue];[self.table addTableColumn:column];}
     scroll.documentView=self.table;[self.window.contentView addSubview:scroll];
-    [self label:@"Click reveals items marked Hide. Show everything also reveals Always hide." frame:NSMakeRect(28,156,765,21) size:12 secondary:YES];
-    self.autoHideButton=[NSButton checkboxWithTitle:@"Hide again after 15 seconds" target:self action:@selector(toggleAutoHide:)];self.autoHideButton.frame=NSMakeRect(28,122,320,24);self.autoHideButton.state=[NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]?1:0;[self.window.contentView addSubview:self.autoHideButton];
+    [self label:@"Click opens a panel below the menu bar. Option-click includes Always hide." frame:NSMakeRect(28,156,765,21) size:12 secondary:YES];
+    self.autoHideButton=[NSButton checkboxWithTitle:@"Close panel after 15 seconds" target:self action:@selector(toggleAutoHide:)];self.autoHideButton.frame=NSMakeRect(28,122,320,24);self.autoHideButton.state=[NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]?1:0;[self.window.contentView addSubview:self.autoHideButton];
     self.loginButton=[NSButton checkboxWithTitle:@"Launch at login" target:self action:@selector(toggleLogin:)];self.loginButton.frame=NSMakeRect(420,122,350,24);[self.window.contentView addSubview:self.loginButton];
     self.loginLabel=[self label:@"" frame:NSMakeRect(420,96,370,22) size:11 secondary:YES];
     self.compatibilityLabel=[self label:@"" frame:NSMakeRect(28,60,760,22) size:12 secondary:YES];
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
-    [self label:@"MenuBarCompact 0.2 · apps & system items" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.3 · hidden icon panel" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];[self rebuildRows];[self updateUI];
 }
-- (void)showSettings:(id)sender {if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
-- (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)visible {[self showSettings:nil];return YES;}
+- (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)visible {if(!self.overflow.shown)[self showSettings:nil];return YES;}
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {return self.rows.count;}
 - (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)column row:(NSInteger)index {
     NSDictionary *row=self.rows[index];NSString *identifier=row[@"id"];
@@ -342,7 +442,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(self.compatibilityTask.running){self.stateMessage=@"Finishing iStat check before quitting…";[self updateUI];return NSTerminateCancel;}
     return NSTerminateNow;
 }
-- (void)applicationWillTerminate:(NSNotification *)notification {[self releaseRestriction];[self saveRules];[self log:@"STOP — menu-bar restriction released"];}
+- (void)applicationWillTerminate:(NSNotification *)notification {[self finishInteraction];[self releaseRestriction];[self saveRules];[self log:@"STOP — menu-bar restriction released"];}
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app {return NO;}
 @end
 

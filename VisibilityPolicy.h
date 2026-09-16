@@ -37,3 +37,23 @@ static NSDictionary *MBVisibilityPlan(NSArray<NSString *> *runningIDs, NSDiction
     }
     return @{@"bundles":[allowed.allObjects sortedArrayUsingSelector:@selector(compare:)],@"systems":systems,@"excluded":@(excluded)};
 }
+
+// Listing hidden items is separate from the host visibility policy. Merely
+// opening the panel never grants additional menu-bar visibility.
+static NSArray<NSString *> *MBPanelItems(NSArray<NSString *> *runningIDs, NSDictionary<NSString *,NSNumber *> *rules, NSString *ownID, BOOL includeAlwaysHidden) {
+    NSMutableArray *items=[NSMutableArray new];
+    for(NSString *identifier in rules){
+        NSInteger rule=rules[identifier].integerValue;
+        if(rule!=1 && !(includeAlwaysHidden && rule==2))continue;
+        BOOL system=MBSystemItems()[identifier]!=nil;
+        if(!system && (MBProtectedBundle(identifier,ownID) || ![runningIDs containsObject:identifier]))continue;
+        [items addObject:identifier];
+    }
+    return items;
+}
+static NSDictionary *MBInteractionRules(NSDictionary *rules, NSString *selectedItem) {
+    if(!selectedItem)return rules;
+    NSMutableDictionary *effective=[rules mutableCopy];
+    effective[selectedItem]=@0;
+    return effective;
+}

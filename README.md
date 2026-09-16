@@ -8,8 +8,8 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 
 - **Always show**, **Hide**, and **Always hide** rules for application bundles.
 - The same visibility choices for **Battery**, **Input Method**, and **Spotlight**.
-- Click the menu-bar button to reveal or hide apps; Option-click to show everything.
-- Optional automatic re-hiding after 15 seconds.
+- Click the menu-bar button to open a hidden-icon panel beneath it; Option-click includes Always hide.
+- Optional automatic panel closing after 15 seconds.
 - Searchable settings, with an option to show all running apps.
 - Launch at login through Apple's `SMAppService`.
 - Automatic iStat compatibility checks at startup and once a minute.
@@ -41,11 +41,17 @@ Enable **Launch at login** in Settings to start automatically. When replacing an
 
 ## Using visibility rules
 
-| Rule | Normal state | Click to reveal | Show everything |
+| Rule | Main menu bar | Hidden panel | Include always hidden |
 | --- | --- | --- | --- |
-| Always show | Visible | Visible | Visible |
-| Hide | Hidden | Visible | Visible |
-| Always hide | Hidden | Hidden | Visible |
+| Always show | Visible | Not listed | Not listed |
+| Hide | Hidden | Listed | Listed |
+| Always hide | Hidden | Not listed | Listed |
+
+Opening either panel leaves the main menu bar compact. Closed apps are omitted. The panel uses application icons and system symbols, rather than live screenshots of menu-bar items.
+
+Select an icon to request its original menu. On first use, choose **Allow menu access…** and enable MenuBarCompact in macOS **Device Control and Data Access** (Accessibility). Only the selected item is temporarily allowed back into the menu bar while its menu opens. Other hidden items stay hidden. The selected item hides again after a click, Escape, or a 30-second fallback timeout. No Screen Recording permission is needed.
+
+If an app exposes multiple status controls or no identifiable control, the panel reports that direct selection is unavailable rather than pressing an arbitrary control. Local ad-hoc builds may need permission granted again after replacing the executable.
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
@@ -53,7 +59,7 @@ Settings initially shows configured apps and iStat. Turn on **Show all running a
 
 Battery, Input Method, and Spotlight always appear in Settings, including when hidden. They default to Always show until configured. iStat and the remaining macOS system items are protected from hiding.
 
-System-item rules are temporary visibility restrictions: they do not change the selected input source, disable Spotlight search, or edit macOS's menu-bar preferences. Battery uses its system category; Input Method uses the keyboard category and input-menu agent; Spotlight handles both known host app identities. Normal reveal restores items marked Hide, and Show everything also restores those marked Always hide.
+System-item rules are temporary visibility restrictions: they do not change the selected input source, disable Spotlight search, or edit macOS's menu-bar preferences. Battery uses its system category; Input Method uses the keyboard category and input-menu agent; Spotlight handles both known host app identities. The panel can list these controls while they remain hidden in the main bar.
 
 ## iStat Menus compatibility
 
@@ -82,7 +88,8 @@ Inactive copies and backups are retained. Restoring the original helper location
 ## Development and validation
 
 - `main.m`: native UI, persisted rules, menu-bar control, lifecycle handling, and login registration.
-- `VisibilityPolicy.h`: shared app/system allowlist construction and protected-item rules.
+- `VisibilityPolicy.h`: app/system allowlists, panel filtering, and isolated temporary menu visibility.
+- `MenuActivation.h`: bounded Accessibility discovery and menu activation.
 - `istat_workaround.py`: compatibility detection, installation, status, rollback, and legacy-state migration.
 - `tests/test_workaround.py`: isolated tests that do not modify real applications or launch services.
 
@@ -90,17 +97,17 @@ Inactive copies and backups are retained. Restoring the original helper location
 ./tests/run.sh
 ```
 
-Local validation covered hiding/revealing with iStat retained, automatic re-hiding, rule persistence, quitting/relaunching, and conflict handling with Thaw. Menu-bar presence was checked through macOS accessibility; that does not verify every rendered meter or interaction. An actual logout/login, sleep/wake cycle, and multiple-display behavior have not been comprehensively tested.
+Local validation covered hiding/revealing with iStat retained, rule persistence, quitting/relaunching, conflict handling with Thaw, and opening the overflow panel while keeping the main bar compact. Opening original menus still needs live verification after granting MenuBarCompact Accessibility permission. Menu-bar presence was checked through macOS accessibility; that does not verify every rendered meter or interaction. An actual logout/login, sleep/wake cycle, and multiple-display behavior have not been comprehensively tested.
 
 The compatibility tests cover unchanged copies, executable updates, resource-only updates, absent installations, unexpected helper paths, rollback preservation, and legacy migration.
 
-Native visibility-policy tests also cover system-only activation, independent Battery changes, Input Method and Spotlight identities, protected items, and both reveal modes. Battery and Spotlight hide/reveal behavior was checked live on macOS 27; the input-menu control is unlabeled in the host's accessibility tree, limiting automated identification.
+Native visibility-policy tests also cover system-only activation, independent Battery changes, Input Method and Spotlight identities, protected items, both legacy reveal modes, panel filtering, and temporary visibility limited to the selected item. Battery and Spotlight hide/reveal behavior was checked live on macOS 27; the input-menu control is unlabeled in the host's accessibility tree, limiting automated identification.
 
 Logs stay local at `~/Library/Application Support/MenuBarCompact/events.log`. Preferences use `io.github.iamwrm.MenuBarCompact`. Local logs, screenshots, build products, and user settings are excluded from the repository. There is no telemetry or network service.
 
 ## Current limitations
 
-Third-party visibility is per app bundle, not per individual icon. The three supported system controls have separate rules. Drag-to-reorder layouts, hover/scroll reveal, global hotkeys, and an overflow panel are not implemented. Revealed icons can still overflow a crowded or notched menu bar.
+Third-party visibility is per app bundle, not per individual icon. The three supported system controls have separate rules. Drag-to-reorder layouts, hover/scroll reveal, and global hotkeys are not implemented. Panel icons represent apps, not live meter contents. Menu activation depends on each app’s Accessibility support; native menus retain their original location and are not embedded in the panel. The one temporarily revealed item may still overflow a crowded or notched menu bar.
 
 The menu-bar API is loaded dynamically and checked at runtime. The implementation does not require a private entitlement or changes to OS security settings. There is no dependency on Thaw's binary or source code.
 
