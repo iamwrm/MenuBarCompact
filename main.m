@@ -121,7 +121,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.4.0"];
+    [self log:@"START MenuBarCompact 0.4.1"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -315,6 +315,13 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
             [self.overflow performClose:nil];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,700*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
                 NSArray *targets=MBMenuTargets(identifier,pid,before);
+                // Hosted controls can arrive after the allowlist completion.
+                // Retry discovery only; never repeat a press that may succeed.
+                for(NSUInteger attempt=0;!targets.count && attempt<10;attempt++){
+                    [NSThread sleepForTimeInterval:0.15];
+                    targets=MBMenuTargets(identifier,pid,before);
+                }
+                if(!targets.count){NSMutableArray *identities=[NSMutableArray new];for(id item in MBHostButtons())[identities addObject:MBAXIdentity(item)];[self log:[NSString stringWithFormat:@"MENU discovery %@ host=%@",identifier,identities]];}
                 dispatch_async(dispatch_get_main_queue(),^{
                     if(revision!=self.interactionGeneration)return;
                     if(targets.count!=1){

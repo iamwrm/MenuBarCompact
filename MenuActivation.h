@@ -32,7 +32,16 @@ static NSArray *MBAXStatusButtons(pid_t pid, BOOL host) {
     if(extras)MBAXButtons((__bridge AXUIElementRef)extras,result,0,&budget);
     // The macOS 27 host exposes status controls under its dialog, rather than
     // AXExtrasMenuBar. Never traverse arbitrary app windows as a fallback.
-    if(host && !result.count)MBAXButtons(app,result,0,&budget);
+    if(host){
+        // AXExtrasMenuBar can contain only system extras while third-party
+        // and Spotlight buttons live in the host's separate status windows.
+        MBAXButtons(app,result,0,&budget);
+        id windows=MBAXValue(app,kAXWindowsAttribute);
+        if([windows isKindOfClass:NSArray.class])for(id window in windows)MBAXButtons((__bridge AXUIElementRef)window,result,0,&budget);
+        NSMutableArray *unique=[NSMutableArray new];
+        for(id element in result){BOOL duplicate=NO;for(id prior in unique)if(CFEqual((__bridge CFTypeRef)element,(__bridge CFTypeRef)prior)){duplicate=YES;break;}if(!duplicate)[unique addObject:element];}
+        result=unique;
+    }
     CFRelease(app);return result;
 }
 static NSArray *MBHostButtons(void) {
@@ -60,6 +69,34 @@ static NSArray *MBMenuTargets(NSString *identifier,pid_t pid,NSArray *before) {
     for(id e in host){BOOL found=NO;for(id prior in before)if(MBAXSameElement(e,prior)){found=YES;break;}if(!found)[added addObject:e];}
     return added.count==1?added:@[];
 }
+// Geometry is checked before posting a fallback mouse event. A stale or
+// malformed AX element must never cause a click in an application window.
+static BOOL MBMenuClickPoint(CGPoint origin,CGSize dimensions,NSArray<NSValue *> *displayFrames,CGPoint *point) {
+    if(!isfinite(origin.x) || !isfinite(origin.y) || !isfinite(dimensions.width) || !isfinite(dimensions.height))return NO;
+    if(dimensions.width<=0 || dimensions.width>400 || dimensions.height<=0 || dimensions.height>64)return NO;
+    CGRect item=CGRectMake(origin.x,origin.y,dimensions.width,dimensions.height);
+    for(NSValue *value in displayFrames){CGRect bar=NSRectToCGRect(value.rectValue);bar.size.height=64;
+        if(CGRectContainsRect(bar,item)){*point=CGPointMake(CGRectGetMidX(item),CGRectGetMidY(item));return YES;}
+    }
+    return NO;
+}
+static AXError MBClickMenuTarget(AXUIElementRef element) {
+    id position=MBAXValue(element,kAXPositionAttribute),size=MBAXValue(element,kAXSizeAttribute);
+    if(!position || !size || CFGetTypeID((__bridge CFTypeRef)position)!=AXValueGetTypeID() || CFGetTypeID((__bridge CFTypeRef)size)!=AXValueGetTypeID())return kAXErrorActionUnsupported;
+    CGPoint origin;CGSize dimensions;
+    if(!AXValueGetValue((__bridge AXValueRef)position,kAXValueCGPointType,&origin) || !AXValueGetValue((__bridge AXValueRef)size,kAXValueCGSizeType,&dimensions))return kAXErrorActionUnsupported;
+    CGDirectDisplayID displays[32];uint32_t count=0;NSMutableArray *frames=[NSMutableArray new];
+    if(CGGetActiveDisplayList(32,displays,&count)!=kCGErrorSuccess)return kAXErrorFailure;
+    for(uint32_t i=0;i<count;i++)[frames addObject:[NSValue valueWithRect:NSRectFromCGRect(CGDisplayBounds(displays[i]))]];
+    CGPoint point;if(!MBMenuClickPoint(origin,dimensions,frames,&point))return kAXErrorActionUnsupported;
+    CGEventRef current=CGEventCreate(NULL);CGPoint previous=current?CGEventGetLocation(current):point;if(current)CFRelease(current);
+    CGEventRef down=CGEventCreateMouseEvent(NULL,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
+    CGEventRef up=CGEventCreateMouseEvent(NULL,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);
+    if(!down || !up){if(down)CFRelease(down);if(up)CFRelease(up);return kAXErrorFailure;}
+    CGEventSetIntegerValueField(down,kCGMouseEventClickState,1);CGEventSetIntegerValueField(up,kCGMouseEventClickState,1);
+    CGEventPost(kCGHIDEventTap,down);CGEventPost(kCGHIDEventTap,up);CFRelease(down);CFRelease(up);
+    CGWarpMouseCursorPosition(previous);return kAXErrorSuccess;
+}
 static AXError MBPressMenuTarget(id target) {
     AXUIElementRef element=(__bridge AXUIElementRef)target;
     AXUIElementSetMessagingTimeout(element,1.0);
@@ -68,5 +105,9 @@ static AXError MBPressMenuTarget(id target) {
     BOOL show=actions && CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXShowMenuAction);
     if(actions)CFRelease(actions);
     // Do not retry a timed-out press: it may already have opened a menu.
-    return press?AXUIElementPerformAction(element,kAXPressAction):(show?AXUIElementPerformAction(element,kAXShowMenuAction):kAXErrorActionUnsupported);
+    AXError result=press?AXUIElementPerformAction(element,kAXPressAction):(show?AXUIElementPerformAction(element,kAXShowMenuAction):kAXErrorActionUnsupported);
+    // Some macOS 27 host buttons advertise AXPress but reject it. Only a
+    // definitive unsupported response permits this single coordinate click.
+    if(result==kAXErrorActionUnsupported || result==kAXErrorNotImplemented)return MBClickMenuTarget(element);
+    return result;
 }
