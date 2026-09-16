@@ -23,7 +23,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 @interface MenuBarCompact : NSObject <NSApplicationDelegate, MBVisibilityEditorDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSPopoverDelegate, NSWindowDelegate>
 @property NSStatusItem *statusItem;
 @property NSWindow *window;
-@property NSTextField *summaryLabel, *compatibilityLabel, *loginLabel;
+@property NSTextField *compatibilityLabel, *loginLabel;
 @property NSButton *loginButton, *autoHideButton, *takeOverButton, *toggleButton, *allAppsButton;
 @property NSSearchField *search;
 @property NSScrollView *visibilityEditorScroll;
@@ -135,7 +135,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.maintenance.tolerance=10;
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.7"];
+    [self log:@"START MenuBarCompact 0.6.8"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -493,8 +493,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     NSString *tip=[NSString stringWithFormat:@"MenuBarCompact — %@\nClick for hidden icons below the menu bar. Right-click for settings. Option-click includes always-hidden icons.",self.stateMessage?:@""];
     if(![self.statusItem.button.toolTip isEqual:tip])self.statusItem.button.toolTip=tip;
     if(!self.window.visible)return;
-    NSString *summary=self.stateMessage?:@"Starting…",*compatibility=self.compatibilityMessage?:@"Checking iStat…";
-    if(![self.summaryLabel.stringValue isEqual:summary])self.summaryLabel.stringValue=summary;
+    NSString *compatibility=self.compatibilityMessage?:@"Checking iStat…";
     if(![self.compatibilityLabel.stringValue isEqual:compatibility])self.compatibilityLabel.stringValue=compatibility;
     self.takeOverButton.hidden=self.running[ThawID]==nil;
     NSString *toggle=shown?@"Close hidden panel":@"Open hidden panel";
@@ -513,11 +512,9 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     NSButton *button=[NSButton buttonWithTitle:text target:self action:action];button.frame=frame;[self.window.contentView addSubview:button];return button;
 }
 - (void)buildWindow {
-    self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,960,720) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+    self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,960,630) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     self.window.delegate=self;self.window.contentMinSize=NSMakeSize(800,600);
     self.window.title=@"MenuBarCompact";self.window.releasedWhenClosed=NO;self.window.animationBehavior=NSWindowAnimationBehaviorNone;self.renderedLaneRows=[NSMutableDictionary new];
-    NSTextField *title=[self label:@"A quieter menu bar." frame:NSMakeRect(28,655,900,35) size:26 secondary:NO];title.font=[NSFont systemFontOfSize:26 weight:NSFontWeightSemibold];
-    self.summaryLabel=[self label:@"Starting…" frame:NSMakeRect(28,625,900,24) size:14 secondary:YES];
     self.toggleButton=[self button:@"Open hidden panel" action:@selector(toggle:) frame:NSMakeRect(24,580,180,32)];
     [self button:@"All hidden icons" action:@selector(showAll:) frame:NSMakeRect(210,580,160,32)];
     self.takeOverButton=[self button:@"Quit Thaw and start" action:@selector(takeOver:) frame:NSMakeRect(725,580,210,32)];
@@ -526,7 +523,6 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     // Header stays at the top when wrapping makes the window taller. Footer
     // controls stay at the bottom; only the section viewport stretches.
     for(NSView *view in self.window.contentView.subviews)view.autoresizingMask=NSViewMinYMargin;
-    title.autoresizingMask|=NSViewWidthSizable;self.summaryLabel.autoresizingMask|=NSViewWidthSizable;
     self.search.autoresizingMask|=NSViewWidthSizable;self.allAppsButton.autoresizingMask|=NSViewMinXMargin;
     self.takeOverButton.autoresizingMask|=NSViewMinXMargin;
     self.visibilityEditorScroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(28,208,904,304)];
@@ -557,7 +553,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.7 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.6.8 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     self.userResizedSettings=YES;
     self.userResizedSettings=[self.window setFrameUsingName:@"MenuBarCompact.Settings"];
     if(!self.userResizedSettings)[self.window center];
@@ -592,7 +588,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(!self.userResizedSettings && !self.search.stringValue.length){
         NSRect screen=(self.window.screen?:NSScreen.mainScreen).visibleFrame;
         CGFloat maxHeight=[self.window contentRectForFrameRect:screen].size.height-16;
-        CGFloat height=MIN(maxHeight,720+MAX(0,totalHeight-304));
+        CGFloat height=MIN(maxHeight,630+MAX(0,totalHeight-304));
         if(fabs(self.window.contentView.bounds.size.height-height)>0.5){
             NSRect frame=self.window.frame;CGFloat oldHeight=frame.size.height;
             frame.size.height=[self.window frameRectForContentRect:NSMakeRect(0,0,self.window.contentView.bounds.size.width,height)].size.height;
