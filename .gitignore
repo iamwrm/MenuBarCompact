@@ -1,0 +1,8 @@
+build/
+DerivedData/
+results/
+*.log
+*.xcuserstate
+xcuserdata/
+__pycache__/
+.DS_Store
