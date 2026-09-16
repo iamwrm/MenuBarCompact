@@ -26,7 +26,27 @@ The first prototype was called MenuShelter. Existing prototype visibility rules 
 - Developer-tools Python at `/usr/bin/python3` for the bundled iStat compatibility utility.
 - Write access to `/Applications` when applying the iStat workaround.
 
-This version uses an **undocumented macOS menu-bar API**. Future OS updates may change its behavior or remove it. It is a local development build, not a notarized distribution.
+This version uses an **undocumented macOS menu-bar API**. Future OS updates may change its behavior or remove it. Download builds are not notarized.
+
+## Download
+
+Get the ZIP from [GitHub Releases](https://github.com/iamwrm/MenuBarCompact/releases/latest). Release downloads target **Apple Silicon running macOS 27**. Unzip the asset and copy `MenuBarCompact.app` to `/Applications`.
+
+Release builds use no Apple signing certificate or notarization. macOS may require manual approval on first launch, and Accessibility permission may need to be renewed after replacing a differently signed build. The arm64 linker can include an ad-hoc code seal required to execute the binary; it is not a developer signature. A `.sha256` checksum accompanies each ZIP.
+
+### Publishing a release
+
+The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
+
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.2`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+
+To build the same package locally:
+
+```sh
+./scripts/package-release.sh 0.6.2
+```
+
+Output: `dist/MenuBarCompact-0.6.2-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
