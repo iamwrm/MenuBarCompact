@@ -5,6 +5,7 @@
 #import "MenuActivation.h"
 #import "SystemDiscovery.h"
 #import "VisibilityEditor.h"
+#import "MaintenancePolicy.h"
 
 // Narrow macOS 27 runtime interface, reconstructed in our diagnostic project.
 // Runtime lookup lets the app fail open if a future OS removes this API.
@@ -33,7 +34,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 @property NSDictionary<NSString *,NSRunningApplication *> *running;
 @property id assertion;
 @property NSArray *lastAllowlist, *lastSystemAllowlist;
-@property NSTimer *rehideTimer, *maintenance, *processWatch;
+@property NSTimer *rehideTimer, *maintenance, *activationTimeout;
+@property NSArray *verifiedCompatibilityFingerprint;
+@property NSTimeInterval lastCompatibilityAudit, lastCompatibilityAttempt;
+@property NSCache<NSString *,NSImage *> *iconCache;
+@property NSMutableDictionary<NSNumber *,NSArray *> *renderedLaneRows;
+@property NSImage *closedStatusImage, *openStatusImage;
 @property NSTask *compatibilityTask;
 @property NSUInteger generation, refreshGeneration;
 @property VisibilityMode mode;
@@ -119,27 +125,27 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [workspace addObserver:self selector:@selector(suspend:) name:NSWorkspaceWillSleepNotification object:nil];
     [workspace addObserver:self selector:@selector(suspend:) name:NSWorkspaceSessionDidResignActiveNotification object:nil];
     [self refreshApps];[self checkCompatibility:nil];
+    // Workspace notifications handle normal changes. One coalescible sweep
+    // catches helper events missed by the macOS beta without frequent polling.
     self.maintenance=[NSTimer scheduledTimerWithTimeInterval:60 target:self selector:@selector(maintain:) userInfo:nil repeats:YES];
-    // NSWorkspace can miss helper/agent exits on the current macOS beta.
-    // Compare process identities cheaply; rebuild only when the set changes.
-    self.processWatch=[NSTimer timerWithTimeInterval:3 target:self selector:@selector(pollApps:) userInfo:nil repeats:YES];
-    [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
+    self.maintenance.tolerance=10;
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.2"];
+    [self log:@"START MenuBarCompact 0.6.3"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
-        self.paused=NO;[self releaseRestriction];
+        self.paused=NO;self.maintenance.fireDate=[NSDate dateWithTimeIntervalSinceNow:60];[self releaseRestriction];
     }
     NSUInteger revision=++self.refreshGeneration;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,400*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
         if(revision!=self.refreshGeneration)return;
-        [self refreshApps];[self applyVisibility];
+        if(self.paused)return;
+        [self refreshApps];[self checkCompatibility:nil];[self applyVisibility];
     });
 }
-- (void)suspend:(NSNotification *)note {self.paused=YES;[self releaseRestriction];}
-- (void)maintain:(id)sender {[self discoverSystemItems:nil];[self refreshApps];[self checkCompatibility:nil];}
+- (void)suspend:(NSNotification *)note {self.paused=YES;self.maintenance.fireDate=NSDate.distantFuture;[self.overflow performClose:nil];[self finishInteraction];[self releaseRestriction];}
+- (void)maintain:(id)sender {if(self.paused)return;[self pollApps:nil];[self discoverSystemItems:nil];[self checkCompatibility:nil];}
 - (void)pollApps:(id)sender {
     NSMutableDictionary *latest=[NSMutableDictionary new], *previous=[NSMutableDictionary new];
     for(NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications)if(app.bundleIdentifier.length && !app.terminated)latest[app.bundleIdentifier]=@(app.processIdentifier);
@@ -154,15 +160,18 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.running=running;[self rebuildRows];
 }
 - (void)discoverSystemItems:(id)sender {
-    NSDictionary *catalog=MBDiscoverSystemItems();self.discoveryReady=catalog.count>0;
+    BOOL wasReady=self.discoveryReady;
+    NSDictionary *catalog=MBDiscoverSystemItems(sender!=nil);self.discoveryReady=catalog.count>0;
     if(!catalog){[self log:@"DISCOVERY unavailable — hiding paused"];[self applyVisibility];return;}
+    if(wasReady==self.discoveryReady && [catalog isEqual:MBSystemItems()] && !sender)return;
     if(![catalog isEqual:MBSystemItems()]){
-        MBSetSystemItems(catalog);
+        MBSetSystemItems(catalog);[self.iconCache removeAllObjects];
         [self log:[NSString stringWithFormat:@"DISCOVERY %lu system items (%lu runtime categories)",(unsigned long)catalog.count,(unsigned long)MBSystemCategoryIDs().count]];
     }
     if(self.rules)[self rebuildRows];if(self.ready)[self applyVisibility];
 }
 - (void)rebuildRows {
+    if(!self.window.visible)return;
     NSMutableSet *ids=[NSMutableSet setWithArray:self.rules.allKeys];
     [ids addObject:IStatID];
     [ids addObjectsFromArray:MBSystemItems().allKeys];
@@ -172,19 +181,18 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     NSString *query=self.search.stringValue?:@"";
     NSMutableArray *rows=[NSMutableArray new];
     for(NSString *identifier in ids){
-        NSString *name=self.names[identifier];
-        if(!name){NSURL *url=[NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:identifier];name=url?[[NSFileManager.defaultManager displayNameAtPath:url.path] stringByDeletingPathExtension]:identifier;}
+        NSString *name=MBSystemItems()[identifier][@"name"]?:self.names[identifier];
+        if(!name){NSURL *url=[NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:identifier];name=url?[[NSFileManager.defaultManager displayNameAtPath:url.path] stringByDeletingPathExtension]:identifier;self.names[identifier]=name;}
         if([identifier isEqual:IStatID])name=@"iStat Menus";
-        if(MBSystemItems()[identifier])name=MBSystemItems()[identifier][@"name"];
         if(query.length && [name rangeOfString:query options:NSCaseInsensitiveSearch].location==NSNotFound && [identifier rangeOfString:query options:NSCaseInsensitiveSearch].location==NSNotFound)continue;
-        [rows addObject:@{@"id":identifier,@"name":name?:identifier,@"running":@(self.running[identifier]!=nil),@"rule":self.rules[identifier]?:@0,@"system":MBSystemItems()[identifier]?:@{}}];
+        [rows addObject:@{@"id":identifier,@"name":name?:identifier,@"running":@(self.running[identifier]!=nil),@"pid":@(self.running[identifier].processIdentifier),@"rule":self.rules[identifier]?:@0,@"system":MBSystemItems()[identifier]?:@{}}];
     }
     NSArray *sorted=[rows sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
     if([sorted isEqual:self.rows])return;self.rows=sorted;
     [self renderVisibilityLanes];
 }
 - (void)releaseRestriction {
-    self.generation++;self.activationPending=NO;
+    self.generation++;self.activationPending=NO;[self.activationTimeout invalidate];self.activationTimeout=nil;
     if(self.assertion){[self.assertion invalidate];self.assertion=nil;[self log:@"RELEASE visibility restriction"];}
     self.lastAllowlist=nil;self.lastSystemAllowlist=nil;
 }
@@ -218,16 +226,16 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         [self.assertion activateWithConfiguration:config completionHandler:^(NSError *error){
             dispatch_async(dispatch_get_main_queue(),^{
                 if(revision!=self.generation)return;
-                self.activationPending=NO;
+                self.activationPending=NO;[self.activationTimeout invalidate];self.activationTimeout=nil;
                 if(error){[self releaseRestriction];self.stateMessage=@"Could not hide apps; all items remain visible";[self log:[NSString stringWithFormat:@"ACTIVATE failed: %@",error]];}
                 else {self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=%@",(long)self.mode,(unsigned long)excluded,[bundles containsObject:IStatID]?@"allowed":@"hidden"]];}
                 [self updateUI];
             });
         }];
         // Do not retain an uncertain assertion indefinitely if the private host stops replying.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        self.activationTimeout=[NSTimer scheduledTimerWithTimeInterval:5 repeats:NO block:^(NSTimer *timer){
             if(revision==self.generation && self.activationPending){[self releaseRestriction];self.stateMessage=@"Menu bar did not respond; hiding is paused";[self updateUI];}
-        });
+        }];
     } @catch(NSException *exception){[self releaseRestriction];self.stateMessage=@"Hiding is unavailable; all items remain visible";[self log:exception.reason];}
     [self updateUI];
 }
@@ -257,6 +265,13 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]];
 }
 - (NSImage *)rowIconForIdentifier:(NSString *)identifier name:(NSString *)name {
+    if(!self.iconCache){self.iconCache=[NSCache new];self.iconCache.countLimit=128;}
+    NSString *key=[NSString stringWithFormat:@"%@:%d",identifier,self.running[identifier].processIdentifier];
+    NSImage *image=[self.iconCache objectForKey:key];
+    if(!image){image=[self loadRowIconForIdentifier:identifier name:name];if(image)[self.iconCache setObject:image forKey:key];}
+    return image;
+}
+- (NSImage *)loadRowIconForIdentifier:(NSString *)identifier name:(NSString *)name {
     NSDictionary *system=MBSystemItems()[identifier];
     if(system){
         NSBundle *plugin=[system[@"bundlePath"] length]?[NSBundle bundleWithPath:system[@"bundlePath"]]:nil;
@@ -277,7 +292,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     return self.running[identifier].icon?:[NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:name];
 }
 - (void)openOverflowIncludingAlwaysHidden:(BOOL)all {
-    [self finishInteraction];
+    [self refreshApps];[self finishInteraction];
     self.mode=Collapsed;[self applyVisibility];self.includeAlwaysHidden=all;
     NSMutableArray *items=[NSMutableArray new];
     for(NSString *identifier in MBPanelItems(self.running.allKeys,self.rules,OwnID,all)){
@@ -306,7 +321,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         button.frame=NSMakeRect(index*32,2,32,28);[row addSubview:button];index++;
     }
     if(!items.count){NSButton *empty=[NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"ellipsis" accessibilityDescription:@"No running hidden items"] target:self action:@selector(showSettings:)];empty.bordered=NO;empty.frame=NSMakeRect(0,2,32,28);empty.toolTip=@"No running hidden items — open Settings";[row addSubview:empty];}
-    if(!self.overflow){self.overflow=[NSPopover new];self.overflow.behavior=NSPopoverBehaviorTransient;self.overflow.delegate=self;}
+    if(!self.overflow){self.overflow=[NSPopover new];self.overflow.animates=NO;self.overflow.behavior=NSPopoverBehaviorTransient;self.overflow.delegate=self;}
     self.overflow.contentViewController=controller;self.overflow.contentSize=NSMakeSize(width,height);
     if(!self.overflow.shown)[self.overflow showRelativeToRect:self.statusItem.button.bounds ofView:self.statusItem.button preferredEdge:NSRectEdgeMinY];
     [NSApp activateIgnoringOtherApps:YES];[self.overflow.contentViewController.view.window makeKeyWindow];
@@ -336,10 +351,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
             self.activeItem=identifier;[self applyVisibility];
             [self.overflow performClose:nil];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,700*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                if(revision!=self.interactionGeneration)return;
                 NSArray *targets=MBMenuTargets(pid,before,systemMetadata);
                 // Hosted controls can arrive after the allowlist completion.
                 // Retry discovery only; never repeat a press that may succeed.
                 for(NSUInteger attempt=0;!targets.count && attempt<10;attempt++){
+                    if(revision!=self.interactionGeneration)return;
                     [NSThread sleepForTimeInterval:0.15];
                     targets=MBMenuTargets(pid,before,systemMetadata);
                 }
@@ -347,12 +364,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
                 dispatch_async(dispatch_get_main_queue(),^{
                     if(revision!=self.interactionGeneration)return;
                     if(targets.count!=1){
-                        [self finishInteraction];[self openOverflowIncludingAlwaysHidden:self.includeAlwaysHidden];
-                        [self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:targets.count?@"This app exposes multiple menu controls. Direct selection is not available yet.":@"The menu-bar host did not expose a matching control. The item has been hidden again."];
+                        [self finishInteraction];[self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:targets.count?@"This app exposes multiple menu controls. Direct selection is not available yet.":@"The menu-bar host did not expose a matching control. The item has been hidden again."];
                         [self.rehideTimer invalidate];[self log:[NSString stringWithFormat:@"MENU unresolved %@ candidates=%lu",identifier,(unsigned long)targets.count]];return;
                     }
                     [self log:[NSString stringWithFormat:@"MENU activating %@; only this item is temporarily visible",identifier]];
                     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                        if(revision!=self.interactionGeneration)return;
                         // iStat rejects AXPress even on the host; activate its verified
                         // status-item geometry directly, without first issuing an AX press.
                         AXError result=[identifier isEqual:IStatID]?MBClickMenuTarget((__bridge AXUIElementRef)targets.firstObject):MBPressMenuTarget(targets.firstObject);
@@ -360,7 +377,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
                             if(revision!=self.interactionGeneration)return;
                             [self log:[NSString stringWithFormat:@"MENU activation result=%d for %@",result,identifier]];
                             if(result!=kAXErrorSuccess && result!=kAXErrorCannotComplete){
-                                [self finishInteraction];[self openOverflowIncludingAlwaysHidden:self.includeAlwaysHidden];[self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:@"The app declined the Accessibility menu request."];return;
+                                [self finishInteraction];[self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:@"The app declined the Accessibility menu request."];return;
                             }
                             self.interactionTimer=[NSTimer scheduledTimerWithTimeInterval:30 repeats:NO block:^(NSTimer *timer){[self finishInteraction];}];
                             self.outsideMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp|NSEventMaskRightMouseUp|NSEventMaskKeyDown handler:^(NSEvent *event){
@@ -388,11 +405,25 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 }
 - (void)menuWillOpen:(NSMenu *)menu {self.menuOpen=YES;}
 - (void)menuDidClose:(NSMenu *)menu {self.menuOpen=NO;}
+- (NSArray *)compatibilityFingerprint {
+    NSString *support=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"];
+    NSMutableArray *paths=[NSMutableArray new];
+    for(NSString *bundle in @[[support stringByAppendingPathComponent:@"iStat Menus 7/iStat Menus Menubar.app"],@"/Applications/iStat Menus Menubar Compatibility.app"]){
+        for(NSString *file in @[@"Contents/MacOS/iStat Menus Menubar",@"Contents/Info.plist",@"Contents/_CodeSignature/CodeResources"])[paths addObject:[bundle stringByAppendingPathComponent:file]];
+    }
+    [paths addObject:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents/com.bjango.istatmenus.status.plist"]];
+    [paths addObject:[support stringByAppendingPathComponent:@"MenuBarCompact/workaround.json"]];
+    return @[MBFileFingerprint(paths),@(self.running[IStatID].processIdentifier)];
+}
 - (void)checkCompatibility:(id)sender {
-    if(self.compatibilityTask.running)return;
+    if(self.compatibilityTask || self.paused)return;
+    NSArray *fingerprint=[self compatibilityFingerprint];
+    NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
+    if(!MBNeedsCompatibilityAudit(fingerprint,self.verifiedCompatibilityFingerprint,self.ready,now-self.lastCompatibilityAudit,self.lastCompatibilityAttempt>0?now-self.lastCompatibilityAttempt:60,sender!=nil))return;
+    self.lastCompatibilityAttempt=now;
     NSString *script=[NSBundle.mainBundle pathForResource:@"istat_workaround" ofType:@"py"];
     if(!script){self.ready=NO;self.compatibilityMessage=@"Compatibility helper is missing; reinstall MenuBarCompact";[self applyVisibility];return;}
-    NSTask *task=[NSTask new];task.executableURL=[NSURL fileURLWithPath:@"/usr/bin/python3"];task.arguments=@[script,@"ensure"];
+    NSTask *task=[NSTask new];task.executableURL=[NSURL fileURLWithPath:@"/usr/bin/python3"];task.arguments=@[script,@"ensure"];task.qualityOfService=NSQualityOfServiceUtility;
     NSPipe *pipe=[NSPipe pipe];task.standardOutput=pipe;task.standardError=pipe;self.compatibilityTask=task;
     NSError *error;
     if(![task launchAndReturnError:&error]){self.compatibilityTask=nil;self.ready=NO;self.compatibilityMessage=@"Could not check iStat; open diagnostics for details";[self log:error.description];[self applyVisibility];return;}
@@ -402,7 +433,9 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
             self.compatibilityTask=nil;self.ready=task.terminationStatus==0;
             self.compatibilityMessage=self.ready?@"iStat compatibility is ready · checked automatically":@"iStat compatibility needs attention · hiding is paused";
             if(!self.ready || sender)[self log:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]?:@"Compatibility check returned no output"];
-            [self refreshApps];[self applyVisibility];
+            [self refreshApps];
+            if(self.ready){self.verifiedCompatibilityFingerprint=[self compatibilityFingerprint];self.lastCompatibilityAudit=NSProcessInfo.processInfo.systemUptime;}
+            [self applyVisibility];
         });
     });
 }
@@ -412,7 +445,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(enabled && service.status!=SMAppServiceStatusEnabled)success=[service registerAndReturnError:&error];
     else if(!enabled && service.status!=SMAppServiceStatusNotRegistered)success=[service unregisterAndReturnError:&error];
     if(!success)[self log:[NSString stringWithFormat:@"LOGIN: %@",error]];
-    [self updateUI];
+    [self updateLoginUI];
 }
 - (void)toggleLogin:(NSButton *)sender {[self setLoginEnabled:sender.state==NSControlStateValueOn];}
 - (void)toggleAutoHide:(NSButton *)sender {
@@ -425,13 +458,22 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 - (void)openDiagnostics:(id)sender {[NSWorkspace.sharedWorkspace openURL:self.logURL];}
 - (void)toggleAppScope:(id)sender {self.search.placeholderString=self.allAppsButton.state==NSControlStateValueOn?@"Find an app":@"Find a configured item";[self rebuildRows];}
 - (void)updateUI {
-    self.summaryLabel.stringValue=self.stateMessage?:@"Starting…";
-    self.compatibilityLabel.stringValue=self.compatibilityMessage?:@"Checking iStat…";
+    BOOL shown=self.overflow.shown;
+    if(!self.closedStatusImage){self.closedStatusImage=[NSImage imageWithSystemSymbolName:@"ellipsis.circle" accessibilityDescription:@"MenuBarCompact"];self.closedStatusImage.template=YES;
+        self.openStatusImage=[NSImage imageWithSystemSymbolName:@"ellipsis.circle.fill" accessibilityDescription:@"MenuBarCompact"];self.openStatusImage.template=YES;}
+    NSImage *image=shown?self.openStatusImage:self.closedStatusImage;
+    if(self.statusItem.button.image!=image)self.statusItem.button.image=image;
+    NSString *tip=[NSString stringWithFormat:@"MenuBarCompact — %@\nClick for hidden icons below the menu bar. Right-click for settings. Option-click includes always-hidden icons.",self.stateMessage?:@""];
+    if(![self.statusItem.button.toolTip isEqual:tip])self.statusItem.button.toolTip=tip;
+    if(!self.window.visible)return;
+    NSString *summary=self.stateMessage?:@"Starting…",*compatibility=self.compatibilityMessage?:@"Checking iStat…";
+    if(![self.summaryLabel.stringValue isEqual:summary])self.summaryLabel.stringValue=summary;
+    if(![self.compatibilityLabel.stringValue isEqual:compatibility])self.compatibilityLabel.stringValue=compatibility;
     self.takeOverButton.hidden=self.running[ThawID]==nil;
-    self.toggleButton.title=self.overflow.shown?@"Close hidden panel":@"Open hidden panel";
-    NSImage *image=[NSImage imageWithSystemSymbolName:self.overflow.shown?@"ellipsis.circle.fill":@"ellipsis.circle" accessibilityDescription:@"MenuBarCompact"];
-    image.template=YES;self.statusItem.button.image=image;
-    self.statusItem.button.toolTip=[NSString stringWithFormat:@"MenuBarCompact — %@\nClick for hidden icons below the menu bar. Right-click for settings. Option-click includes always-hidden icons.",self.stateMessage?:@""];
+    NSString *toggle=shown?@"Close hidden panel":@"Open hidden panel";
+    if(![self.toggleButton.title isEqual:toggle])self.toggleButton.title=toggle;
+}
+- (void)updateLoginUI {
     SMAppServiceStatus status=SMAppService.mainAppService.status;
     self.loginButton.state=(status==SMAppServiceStatusEnabled || status==SMAppServiceStatusRequiresApproval)?NSControlStateValueOn:NSControlStateValueOff;
     self.loginLabel.stringValue=status==SMAppServiceStatusEnabled?@"Starts automatically when you sign in":(status==SMAppServiceStatusRequiresApproval?@"Allow MenuBarCompact in System Settings → Login Items":@"Open MenuBarCompact when you want to use it");
@@ -445,7 +487,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 }
 - (void)buildWindow {
     self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,960,720) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable backing:NSBackingStoreBuffered defer:NO];
-    self.window.title=@"MenuBarCompact";self.window.releasedWhenClosed=NO;
+    self.window.title=@"MenuBarCompact";self.window.releasedWhenClosed=NO;self.window.animationBehavior=NSWindowAnimationBehaviorNone;self.renderedLaneRows=[NSMutableDictionary new];
     NSTextField *title=[self label:@"A quieter menu bar." frame:NSMakeRect(28,655,900,35) size:26 secondary:NO];title.font=[NSFont systemFontOfSize:26 weight:NSFontWeightSemibold];
     self.summaryLabel=[self label:@"Starting…" frame:NSMakeRect(28,625,900,24) size:14 secondary:YES];
     self.toggleButton=[self button:@"Open hidden panel" action:@selector(toggle:) frame:NSMakeRect(24,580,180,32)];
@@ -474,10 +516,10 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.2 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
-    [self.window center];[self rebuildRows];[self renderVisibilityLanes];[self updateUI];
+    [self label:@"MenuBarCompact 0.6.3 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self.window center];
 }
-- (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
+- (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self.window makeKeyAndOrderFront:nil];[self refreshApps];[self updateUI];[self updateLoginUI];[NSApp activateIgnoringOtherApps:YES];}
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)visible {if(!self.overflow.shown)[self showSettings:nil];return YES;}
 - (BOOL)canMoveVisibilityItem:(NSString *)identifier toRule:(NSInteger)rule {
     if(rule<0 || rule>2 || [self protectedID:identifier])return NO;
@@ -485,7 +527,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     return self.rules[identifier]!=nil || self.running[identifier]!=nil || MBSystemItems()[identifier]!=nil;
 }
 - (void)moveVisibilityItem:(NSString *)identifier toRule:(NSInteger)rule {
-    if(![self canMoveVisibilityItem:identifier toRule:rule])return;
+    if(![self canMoveVisibilityItem:identifier toRule:rule] || self.rules[identifier].integerValue==rule)return;
     [self finishInteraction];self.rules[identifier]=@(rule);
     [self saveRules];[self rebuildRows];[self applyVisibility];
 }
@@ -494,9 +536,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     for(NSUInteger rule=0;rule<self.visibilityScrolls.count;rule++){
         NSScrollView *scroll=self.visibilityScrolls[rule];MBVisibilityLane *lane=(MBVisibilityLane *)scroll.documentView;
         CGFloat previousX=scroll.contentView.bounds.origin.x;
-        for(NSView *view in lane.subviews.copy)[view removeFromSuperview];
         NSMutableArray *items=[NSMutableArray new];
         for(NSDictionary *row in self.rows){NSInteger value=[self protectedID:row[@"id"]]?0:MIN(2,MAX(0,[row[@"rule"] integerValue]));if(value==(NSInteger)rule)[items addObject:row];}
+        NSArray *renderKey=@[[items copy],@(self.search.stringValue.length>0)];
+        if([renderKey isEqual:self.renderedLaneRows[@(rule)]])continue;
+        self.renderedLaneRows[@(rule)]=renderKey;
+        for(NSView *view in lane.subviews.copy)[view removeFromSuperview];
         self.visibilityCounts[rule].stringValue=[NSString stringWithFormat:@"%lu item%@",(unsigned long)items.count,items.count==1?@"":@"s"];
         lane.frame=NSMakeRect(0,0,MAX(scroll.contentSize.width,items.count*76+16),scroll.contentSize.height);
         CGFloat x=8;
@@ -519,7 +564,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(self.compatibilityTask.running){self.stateMessage=@"Finishing iStat check before quitting…";[self updateUI];return NSTerminateCancel;}
     return NSTerminateNow;
 }
-- (void)applicationWillTerminate:(NSNotification *)notification {[self finishInteraction];[self releaseRestriction];[self saveRules];[self log:@"STOP — menu-bar restriction released"];}
+- (void)applicationWillTerminate:(NSNotification *)notification {self.paused=YES;[self.maintenance invalidate];[self.rehideTimer invalidate];[self finishInteraction];[self releaseRestriction];[self saveRules];[self log:@"STOP — menu-bar restriction released"];}
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app {return NO;}
 @end
 

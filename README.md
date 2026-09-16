@@ -8,12 +8,12 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 
 - Three horizontal **Always Show**, **Hide**, and **Always Hide** rows: drag icons between rows to save visibility rules immediately.
 - Automatic discovery of macOS system categories and installed menu extras, including **Time Machine**, with persistent visibility rules.
-- System items rescan at startup, once a minute, and through **Rescan system items**.
+- System items are discovered at startup, refreshed when loaded menu extras change, and rescanned through **Rescan system items**.
 - Click the menu-bar button to open a shallow second row of icons beneath it; Option-click includes Always hide.
 - Optional automatic panel closing after 15 seconds.
 - Searchable settings, with an option to show all running apps.
 - Launch at login through Apple's `SMAppService`.
-- Automatic iStat compatibility checks at startup and once a minute.
+- Automatic iStat compatibility checks at startup, when helper files or processes change, and hourly.
 - Import existing Thaw visibility groups on first use, when available.
 - Release hiding restrictions on quit, error, or activation timeout; pause while Thaw runs.
 
@@ -38,15 +38,15 @@ Release builds use no Apple signing certificate or notarization. macOS may requi
 
 The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
 
-Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.2`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.3`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
 
 To build the same package locally:
 
 ```sh
-./scripts/package-release.sh 0.6.2
+./scripts/package-release.sh 0.6.3
 ```
 
-Output: `dist/MenuBarCompact-0.6.2-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
+Output: `dist/MenuBarCompact-0.6.3-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
@@ -56,7 +56,7 @@ Open `MenuBarCompact.xcodeproj` in Xcode and run the **MenuBarCompact** scheme, 
 ./build.sh
 ```
 
-The output is `build/MenuBarCompact.app`. Quit any running copy before replacing it, then copy the built app to `/Applications` and open it. Running from Applications helps the menu-bar host resolve the app's identity correctly.
+The script builds optimized Release code by default; use `CONFIGURATION=Debug ./build.sh` for debugging. The output is `build/MenuBarCompact.app`. Quit any running copy before replacing it, then copy the built app to `/Applications` and open it. Running from Applications helps the menu-bar host resolve the app's identity correctly.
 
 The project uses **Apple Development** signing. The build script selects an installed Apple Development identity when available; set `SIGNING_IDENTITY` to select another certificate. Without one, the script falls back to ad-hoc signing. Ad-hoc signatures are specific to one build, so macOS privacy grants can become stale after rebuilding.
 
@@ -94,6 +94,14 @@ Discovery covers the published category API and installed `.menu` bundles, not e
 
 System-item rules are temporary visibility restrictions: they do not change the selected input source, disable Spotlight search, or edit macOS's menu-bar preferences. Battery uses its system category; Input Method uses the keyboard category and input-menu agent; Spotlight handles both known host app identities. The panel can list these controls while they remain hidden in the main bar.
 
+## Efficiency
+
+Workspace notifications handle app launches and exits. A single 60-second maintenance timer, with 10 seconds of scheduling tolerance, catches missed helper events and checks file metadata. Maintenance pauses during sleep and inactive user sessions. There is no three-second process polling.
+
+Full iStat signature and resource audits run at startup, after relevant metadata or helper-process changes, on manual request, and hourly. Unchanged minute checks do not launch Python or codesign. Failed checks back off for at least a minute.
+
+System metadata, artwork, and status images are cached. Closed Settings windows skip UI updates; visible rows rebuild only when their contents change. Accessibility discovery reuses overlapping traversal results within each request. Panel/window transition animations and cancelled-drag animations are disabled; drag destination feedback remains. Release builds enable compiler optimization. These changes reduce avoidable work; they are not a measured battery-life claim.
+
 ## iStat Menus compatibility
 
 On the tested macOS 27 build, iStat Menus 7.30's Combined item disappeared under menu-bar restrictions even when its bundle ID was allowed. Launching its unchanged, signed helper from Applications kept Combined present while other apps were hidden.
@@ -127,6 +135,7 @@ Inactive copies and backups are retained. Restoring the original helper location
 - `SystemDiscovery.h`: installed menu-extra and legacy-host discovery.
 - `SystemCatalog.h`: stable preference keys, category/plugin metadata, names, and symbols.
 - `MenuActivation.h`: bounded Accessibility discovery and menu activation.
+- `MaintenancePolicy.h`: file fingerprints, periodic audit gating, and retry backoff.
 - `istat_workaround.py`: compatibility detection, installation, status, rollback, and legacy-state migration.
 - `tests/test_workaround.py`: isolated tests that do not modify real applications or launch services.
 
@@ -139,6 +148,12 @@ Local validation covered hiding/revealing with iStat retained, rule persistence,
 iStat visibility tests cover all three choices, default visibility, second-row filtering, and isolated temporary activation. Live checks confirmed hiding the Combined item and opening its native popup from the second row while retaining the signed compatibility helper.
 
 The three-row editor was checked with native drag gestures across all three groups, a drop outside the rows, protected Clock rejection, search filtering, and rule persistence across a signed-app restart. Test visibility changes were restored afterward.
+
+Version 0.6.3 was checked live for Settings search, dragging iStat into Hide, and opening native Battery and iStat menus from the second row. Test rule changes were restored.
+
+Accessibility traversal tests cover overlapping roots, one query per shared control, leaf selection, open-menu isolation, and exhausted request budgets.
+
+Maintenance tests cover unchanged idle sweeps, same-size helper replacement, installation/removal, PID changes, hourly audits, manual checks, and failure backoff.
 
 The compatibility tests cover unchanged copies, executable updates, resource-only updates, absent installations, unexpected helper paths, rollback preservation, and legacy migration.
 

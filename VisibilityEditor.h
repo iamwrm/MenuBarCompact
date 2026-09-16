@@ -38,7 +38,7 @@ static NSPasteboardType const MBVisibilityDragType = @"io.github.iamwrm.MenuBarC
     NSImage *preview=[[NSImage alloc] initWithSize:self.bounds.size];[preview addRepresentation:bitmap];
     [item setDraggingFrame:self.bounds contents:preview];
     NSDraggingSession *session=[self beginDraggingSessionWithItems:@[item] event:self.dragStartEvent source:self];
-    session.animatesToStartingPositionsOnCancelOrFail=YES;
+    session.animatesToStartingPositionsOnCancelOrFail=NO;
 }
 - (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {self.dragStartEvent=nil;self.dragStarted=NO;self.highlighted=NO;self.needsDisplay=YES;}
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {return context==NSDraggingContextWithinApplication?NSDragOperationMove:NSDragOperationNone;}
@@ -68,7 +68,8 @@ static NSPasteboardType const MBVisibilityDragType = @"io.github.iamwrm.MenuBarC
     return [self.editorDelegate canMoveVisibilityItem:identifier toRule:self.rule]?identifier:nil;
 }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
-    self.dropHighlighted=[self acceptedIdentifier:sender]!=nil;self.needsDisplay=YES;
+    BOOL highlight=[self acceptedIdentifier:sender]!=nil;
+    if(self.dropHighlighted!=highlight){self.dropHighlighted=highlight;self.needsDisplay=YES;}
     return self.dropHighlighted?NSDragOperationMove:NSDragOperationNone;
 }
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {return [self draggingEntered:sender];}

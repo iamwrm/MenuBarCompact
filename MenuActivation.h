@@ -10,45 +10,41 @@ static NSArray *MBAXChildren(AXUIElementRef element) {
     id children=MBAXValue(element,kAXChildrenAttribute);
     return [children isKindOfClass:NSArray.class]?children:@[];
 }
-static void MBAXButtons(AXUIElementRef element, NSMutableArray *result, NSUInteger depth, NSUInteger *budget) {
-    if(!*budget || depth>5)return;
-    (*budget)--;
+static BOOL MBAXButtons(AXUIElementRef element, NSMutableArray *result, NSUInteger depth, NSUInteger *budget, CFMutableDictionaryRef visited) {
+    const void *known=NULL;
+    if(CFDictionaryGetValueIfPresent(visited,element,&known))return [(__bridge NSNumber *)known boolValue];
+    if(!*budget || depth>5)return NO;
+    (*budget)--;CFDictionarySetValue(visited,element,kCFBooleanFalse);
     AXUIElementSetMessagingTimeout(element,0.2);
     NSString *role=MBAXValue(element,kAXRoleAttribute);
     // Stop at menus, but allow legacy status controls with AXMenuItem roles.
-    if([role isEqual:(__bridge NSString *)kAXMenuRole])return;
-    CFArrayRef actions=NULL;
-    AXUIElementCopyActionNames(element,&actions);
+    if([role isEqual:(__bridge NSString *)kAXMenuRole])return NO;
+    BOOL childControl=NO;
+    for(id child in MBAXChildren(element))if(MBAXButtons((__bridge AXUIElementRef)child,result,depth+1,budget,visited))childControl=YES;
+    if(childControl){CFDictionarySetValue(visited,element,kCFBooleanTrue);return YES;}
+    // Only query actions for leaves; host containers can advertise a press too.
+    CFArrayRef actions=NULL;AXUIElementCopyActionNames(element,&actions);
     BOOL pressable=actions && (CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXPressAction) || CFArrayContainsValue(actions,CFRangeMake(0,CFArrayGetCount(actions)),kAXShowMenuAction));
     if(actions)CFRelease(actions);
-    // System controls can use host-specific AX roles on macOS 27. The
-    // search root is already restricted to menu extras or MenuBarAgent.
-    NSUInteger count=result.count;
-    for(id child in MBAXChildren(element))MBAXButtons((__bridge AXUIElementRef)child,result,depth+1,budget);
-    // Host containers can advertise a press as well. Prefer the actual leaf
-    // control: it has the stable identity, title, and menu action.
-    if(pressable && result.count==count)[result addObject:(__bridge id)element];
+    if(pressable){[result addObject:(__bridge id)element];CFDictionarySetValue(visited,element,kCFBooleanTrue);}
+    return pressable;
 }
 static NSArray *MBAXStatusButtons(pid_t pid, BOOL host) {
     if(pid<=0)return @[];
     AXUIElementRef app=AXUIElementCreateApplication(pid);
     AXUIElementSetMessagingTimeout(app,0.3);
     NSMutableArray *result=[NSMutableArray new];NSUInteger budget=100;
+    CFMutableDictionaryRef visited=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     id extras=MBAXValue(app,kAXExtrasMenuBarAttribute);
-    if(extras)MBAXButtons((__bridge AXUIElementRef)extras,result,0,&budget);
-    // The macOS 27 host exposes status controls under its dialog, rather than
-    // AXExtrasMenuBar. Never traverse arbitrary app windows as a fallback.
+    if(extras)MBAXButtons((__bridge AXUIElementRef)extras,result,0,&budget,visited);
+    // Both roots can expose the same macOS 27 host controls. Cache traversal
+    // results for this scan so overlapping subtrees cost no extra AX requests.
     if(host){
-        // AXExtrasMenuBar can contain only system extras while third-party
-        // and Spotlight buttons live in the host's separate status windows.
-        MBAXButtons(app,result,0,&budget);
+        MBAXButtons(app,result,0,&budget,visited);
         id windows=MBAXValue(app,kAXWindowsAttribute);
-        if([windows isKindOfClass:NSArray.class])for(id window in windows)MBAXButtons((__bridge AXUIElementRef)window,result,0,&budget);
-        NSMutableArray *unique=[NSMutableArray new];
-        for(id element in result){BOOL duplicate=NO;for(id prior in unique)if(CFEqual((__bridge CFTypeRef)element,(__bridge CFTypeRef)prior)){duplicate=YES;break;}if(!duplicate)[unique addObject:element];}
-        result=unique;
+        if([windows isKindOfClass:NSArray.class])for(id window in windows)MBAXButtons((__bridge AXUIElementRef)window,result,0,&budget,visited);
     }
-    CFRelease(app);return result;
+    CFRelease(visited);CFRelease(app);return result;
 }
 static NSArray *MBHostButtons(void) {
     NSRunningApplication *host=[NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.MenuBarAgent"].firstObject;
@@ -68,15 +64,16 @@ static NSArray *MBMenuTargets(pid_t pid,NSArray *before,NSDictionary *metadata) 
     // iStat's helper proxy rejects activation; use its matching native host
     // control when identities agree, or the existing unambiguous reveal delta.
     if([metadata[@"preferHost"] boolValue]){
-        NSMutableArray *hosted=[NSMutableArray new];
+        NSMutableArray *hosted=[NSMutableArray new];NSMutableSet *identities=[NSMutableSet new];
+        for(id proxy in owned){NSString *identity=MBAXIdentity(proxy);if(identity.length)[identities addObject:identity];}
         for(id element in host){NSString *identity=MBAXIdentity(element);if(!identity.length)continue;
-            for(id proxy in owned)if([identity isEqual:MBAXIdentity(proxy)]){[hosted addObject:element];break;}
+            if([identities containsObject:identity])[hosted addObject:element];
         }
         if(hosted.count)return hosted;
     }
     NSMutableArray *matches=[NSMutableArray new];
     for(id element in host){
-        NSString *ax=MBAXValue((__bridge AXUIElementRef)element,CFSTR("AXIdentifier"));BOOL match=NO;
+        NSString *ax=[metadata[@"axIdentifiers"] count]?MBAXValue((__bridge AXUIElementRef)element,CFSTR("AXIdentifier")):nil;BOOL match=NO;
         for(NSString *expected in metadata[@"axIdentifiers"])if([ax isKindOfClass:NSString.class] && [ax caseInsensitiveCompare:expected]==NSOrderedSame){match=YES;break;}
         NSString *name=metadata[@"axName"];
         if(!match && name.length && [MBAXIdentity(element) rangeOfString:name options:NSCaseInsensitiveSearch].location!=NSNotFound)match=YES;

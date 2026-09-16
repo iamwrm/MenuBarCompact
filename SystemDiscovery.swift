@@ -5,7 +5,8 @@ import Darwin
 final class RuntimeSystemItems: NSObject {
     // This private framework already supplies the visibility assertion. Resolve
     // its CaseIterable metadata instead of guessing an integer range of cases.
-    @objc static func items() -> [[String: Any]] {
+    @objc static func items() -> [[String: Any]] { discoveredItems }
+    private static let discoveredItems: [[String: Any]] = {
         guard let handle = dlopen("/System/Library/PrivateFrameworks/MenuBarClientCore.framework/MenuBarClientCore", RTLD_NOW),
               let type = _typeByName("17MenuBarClientCore22MBSystemItemIdentifierO") as? any CaseIterable.Type,
               let symbol = dlsym(handle, "$s17MenuBarClientCore22MBSystemItemIdentifierO11stringValueSSvg") else { return [] }
@@ -21,5 +22,5 @@ final class RuntimeSystemItems: NSObject {
             result.append(["raw": raw, "token": token])
         }
         return result
-    }
+    }()
 }
