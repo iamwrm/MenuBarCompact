@@ -5,7 +5,7 @@
 static NSDictionary<NSString *,NSDictionary *> *MBSystemItems(void) {
     return @{
         @"system.battery":@{@"name":@"Battery", @"symbol":@"battery.100percent", @"systems":@[@0], @"bundles":@[]},
-        @"system.input-method":@{@"name":@"Input Method", @"symbol":@"keyboard", @"systems":@[@4], @"bundles":@[@"com.apple.TextInputMenuAgent"]},
+        @"system.input-method":@{@"name":@"Input Method", @"symbol":@"character", @"systems":@[@4], @"bundles":@[@"com.apple.TextInputMenuAgent"]},
         @"system.spotlight":@{@"name":@"Spotlight", @"symbol":@"magnifyingglass", @"systems":@[], @"bundles":@[@"com.apple.Spotlight",@"com.apple.campo"]}
     };
 }

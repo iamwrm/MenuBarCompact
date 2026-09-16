@@ -8,7 +8,7 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 
 - **Always show**, **Hide**, and **Always hide** rules for application bundles.
 - The same visibility choices for **Battery**, **Input Method**, and **Spotlight**.
-- Click the menu-bar button to open a hidden-icon panel beneath it; Option-click includes Always hide.
+- Click the menu-bar button to open a shallow second row of icons beneath it; Option-click includes Always hide.
 - Optional automatic panel closing after 15 seconds.
 - Searchable settings, with an option to show all running apps.
 - Launch at login through Apple's `SMAppService`.
@@ -25,7 +25,7 @@ The first prototype was called MenuShelter. Existing prototype visibility rules 
 - Developer-tools Python at `/usr/bin/python3` for the bundled iStat compatibility utility.
 - Write access to `/Applications` when applying the iStat workaround.
 
-This version uses an **undocumented macOS menu-bar API**. Future OS updates may change its behavior or remove it. It is a local, ad-hoc-signed build, not a notarized distribution.
+This version uses an **undocumented macOS menu-bar API**. Future OS updates may change its behavior or remove it. It is a local development build, not a notarized distribution.
 
 ## Build and run
 
@@ -37,6 +37,10 @@ Open `MenuBarCompact.xcodeproj` in Xcode and run the **MenuBarCompact** scheme, 
 
 The output is `build/MenuBarCompact.app`. Quit any running copy before replacing it, then copy the built app to `/Applications` and open it. Running from Applications helps the menu-bar host resolve the app's identity correctly.
 
+The project uses **Apple Development** signing. The build script selects an installed Apple Development identity when available; set `SIGNING_IDENTITY` to select another certificate. Without one, the script falls back to ad-hoc signing. Ad-hoc signatures are specific to one build, so macOS privacy grants can become stale after rebuilding.
+
+If macOS shows the permission enabled but the app still reports no access after a signing change, remove the old MenuBarCompact entry from **Device Control and Data Access**, add `/Applications/MenuBarCompact.app` again, enable it, and reopen the app. Use the same signing identity for subsequent builds.
+
 Enable **Launch at login** in Settings to start automatically. When replacing another menu-bar manager, disable that app's login setting and quit it. Close Settings to leave MenuBarCompact running; quit MenuBarCompact to release its restrictions.
 
 ## Using visibility rules
@@ -47,11 +51,11 @@ Enable **Launch at login** in Settings to start automatically. When replacing an
 | Hide | Hidden | Listed | Listed |
 | Always hide | Hidden | Not listed | Listed |
 
-Opening either panel leaves the main menu bar compact. Closed apps are omitted. The panel uses application icons and system symbols, rather than live screenshots of menu-bar items.
+Opening either panel leaves the main menu bar compact. Closed apps are omitted. The second row has no tiles, labels, or header. Hover an icon for its name. It scrolls horizontally when necessary. Artwork comes from installed apps’ bundled menu glyphs where available, with application-icon and system-symbol fallbacks. These are representative icons, not live screenshots or status updates.
 
-Select an icon to request its original menu. On first use, choose **Allow menu access…** and enable MenuBarCompact in macOS **Device Control and Data Access** (Accessibility). Only the selected item is temporarily allowed back into the menu bar while its menu opens. Other hidden items stay hidden. The selected item hides again after a click, Escape, or a 30-second fallback timeout. No Screen Recording permission is needed.
+Select an icon to request its original menu. If access is missing, clicking an icon opens the permission page; enable MenuBarCompact in macOS **Device Control and Data Access** (Accessibility). Only the selected item is temporarily allowed back into the menu bar while its menu opens. Other hidden items stay hidden. The selected item hides again after a click, Escape, or a 30-second fallback timeout. No Screen Recording permission is needed.
 
-If an app exposes multiple status controls or no identifiable control, the panel reports that direct selection is unavailable rather than pressing an arbitrary control. Local ad-hoc builds may need permission granted again after replacing the executable.
+If an app exposes multiple status controls or no identifiable control, the panel reports that direct selection is unavailable rather than pressing an arbitrary control. Certificate-backed builds preserve the app’s signing identity across updates. Switching signing identities still requires a fresh permission grant.
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
