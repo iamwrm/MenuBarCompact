@@ -126,7 +126,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.0"];
+    [self log:@"START MenuBarCompact 0.6.1"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -464,7 +464,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         scroll.documentView=lane;[self.window.contentView addSubview:scroll];[scrolls addObject:scroll];
     }
     self.visibilityScrolls=scrolls;self.visibilityCounts=counts;
-    [self label:@"Drag icons between rows to change visibility. Scroll sideways to see more. Click an icon for options." frame:NSMakeRect(28,166,905,21) size:12 secondary:YES];
+    [self label:@"Drag icons between rows to change visibility. Scroll sideways to see more." frame:NSMakeRect(28,166,905,21) size:12 secondary:YES];
     self.autoHideButton=[NSButton checkboxWithTitle:@"Close panel after 15 seconds" target:self action:@selector(toggleAutoHide:)];self.autoHideButton.frame=NSMakeRect(28,122,320,24);self.autoHideButton.state=[NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]?1:0;[self.window.contentView addSubview:self.autoHideButton];
     self.loginButton=[NSButton checkboxWithTitle:@"Launch at login" target:self action:@selector(toggleLogin:)];self.loginButton.frame=NSMakeRect(420,122,350,24);[self.window.contentView addSubview:self.loginButton];
     self.loginLabel=[self label:@"" frame:NSMakeRect(420,96,370,22) size:11 secondary:YES];
@@ -472,7 +472,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.6.1 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];[self rebuildRows];[self renderVisibilityLanes];[self updateUI];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
@@ -486,17 +486,6 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(![self canMoveVisibilityItem:identifier toRule:rule])return;
     [self finishInteraction];self.rules[identifier]=@(rule);
     [self saveRules];[self rebuildRows];[self applyVisibility];
-}
-- (void)chooseVisibility:(NSMenuItem *)sender {[self moveVisibilityItem:sender.representedObject toRule:sender.tag];}
-- (void)showVisibilityChoices:(NSButton *)sender {
-    NSMenu *menu=[NSMenu new];menu.autoenablesItems=NO;NSArray *titles=@[@"Always Show",@"Hide",@"Always Hide"];
-    for(NSInteger rule=0;rule<3;rule++){
-        NSMenuItem *item=[menu addItemWithTitle:titles[rule] action:@selector(chooseVisibility:) keyEquivalent:@""];
-        item.target=self;item.tag=rule;item.representedObject=sender.identifier;
-        item.state=self.rules[sender.identifier].integerValue==rule?NSControlStateValueOn:NSControlStateValueOff;
-        item.enabled=[self canMoveVisibilityItem:sender.identifier toRule:rule];
-    }
-    [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,0) inView:sender];
 }
 - (void)renderVisibilityLanes {
     NSArray *titles=@[@"Always Show",@"Hide",@"Always Hide"];
@@ -514,9 +503,9 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
             MBVisibilityIcon *icon=[[MBVisibilityIcon alloc] initWithFrame:NSMakeRect(x,10,72,64)];
             icon.identifier=identifier;icon.title=name;icon.font=[NSFont systemFontOfSize:10];icon.bordered=NO;icon.imagePosition=NSImageAbove;
             NSImage *image=[[self rowIconForIdentifier:identifier name:name] copy];image.size=NSMakeSize(24,24);icon.image=image;icon.imageScaling=NSImageScaleProportionallyDown;
-            icon.cell.lineBreakMode=NSLineBreakByTruncatingTail;icon.movable=!locked;icon.target=self;icon.action=@selector(showVisibilityChoices:);
+            icon.cell.lineBreakMode=NSLineBreakByTruncatingTail;icon.movable=!locked;
             icon.accessibilityLabel=[NSString stringWithFormat:@"%@ — %@%@",name,titles[rule],locked?@" (protected)":@""];
-            icon.toolTip=[NSString stringWithFormat:@"%@\n%@",name,locked?@"Kept visible":@"Drag to another row, or click to choose visibility"];
+            icon.toolTip=[NSString stringWithFormat:@"%@\n%@",name,locked?@"Kept visible":@"Drag to another row to change visibility"];
             [lane addSubview:icon];x+=76;
         }
         if(!items.count){NSTextField *empty=[NSTextField labelWithString:self.search.stringValue.length?@"No matching items in this row":@"Drop icons here"];empty.textColor=NSColor.tertiaryLabelColor;empty.font=[NSFont systemFontOfSize:12];empty.frame=NSMakeRect(20,32,400,20);[lane addSubview:empty];}

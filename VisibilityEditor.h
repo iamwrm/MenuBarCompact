@@ -24,7 +24,6 @@ static NSPasteboardType const MBVisibilityDragType = @"io.github.iamwrm.MenuBarC
 - (void)mouseDown:(NSEvent *)event {self.dragStartEvent=event;self.dragStarted=NO;self.highlighted=YES;self.needsDisplay=YES;}
 - (void)mouseUp:(NSEvent *)event {
     self.highlighted=NO;self.needsDisplay=YES;
-    if(!self.dragStarted && NSPointInRect([self convertPoint:event.locationInWindow fromView:nil],self.bounds))[self performClick:nil];
     self.dragStartEvent=nil;
 }
 - (void)mouseDragged:(NSEvent *)event {

@@ -60,7 +60,7 @@ If an app exposes multiple status controls or no identifiable control, the panel
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
-Settings has three horizontal icon rows. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule. Scroll sideways to reach more icons, search to filter all three rows, or click an icon for a keyboard-accessible visibility menu. Items are alphabetized within each row; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
+Settings has three horizontal icon rows. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule. Scroll sideways to reach more icons, or search to filter all three rows. Clicking a settings icon does not open a menu or change its rule. Items are alphabetized within each row; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
 
 Settings initially shows configured apps, iStat, and discovered system items. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
 
