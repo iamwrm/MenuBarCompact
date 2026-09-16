@@ -6,12 +6,12 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 
 ## Features
 
-- Three horizontal **Always Show**, **Hide**, and **Always Hide** rows: drag icons between rows to save visibility rules immediately.
+- Three **Always Show**, **Hide**, and **Always Hide** sections: drag icons between sections to save visibility rules immediately. Icons wrap onto additional rows instead of scrolling horizontally.
 - Automatic discovery of macOS system categories and installed menu extras, including **Time Machine**, with persistent visibility rules.
 - System items are discovered at startup, refreshed when loaded menu extras change, and rescanned through **Rescan system items**.
 - Click the menu-bar button to open a shallow second row of icons beneath it; Option-click includes Always hide.
 - Optional automatic panel closing after 15 seconds.
-- Searchable settings, with an option to show all running apps.
+- Resizable, searchable settings with remembered window size/position and an option to show all running apps.
 - Launch at login through Apple's `SMAppService`.
 - Automatic iStat compatibility checks at startup, when helper files or processes change, and hourly.
 - Import existing Thaw visibility groups on first use, when available.
@@ -38,15 +38,15 @@ Release builds use no Apple signing certificate or notarization. macOS may requi
 
 The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
 
-Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.6`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.7`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
 
 To build the same package locally:
 
 ```sh
-./scripts/package-release.sh 0.6.6
+./scripts/package-release.sh 0.6.7
 ```
 
-Output: `dist/MenuBarCompact-0.6.6-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
+Output: `dist/MenuBarCompact-0.6.7-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
@@ -80,7 +80,9 @@ If an app exposes multiple status controls or no identifiable control, the panel
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
-Settings has three horizontal icon rows with compact 56-point spacing, fitting 13 complete icons in the standard window. Long labels truncate; hover to read the full name. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule. Scroll sideways to reach more icons, or search to filter all three rows. Clicking a settings icon does not open a menu or change its rule. Items are alphabetized within each row; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
+Settings has three icon sections with compact 56-point spacing. At the default width, each row fits 13 icons; overflow wraps onto a second row, then further rows if needed. There is no horizontal scrolling in Settings. Resize the window to change the number of columns. Its size and position are remembered; the minimum content size is 800 × 600 points. The initial window grows to fit ordinary lists, while larger lists scroll vertically as one page. Once you resize it, your chosen size is preserved. Search does not resize the window on each keystroke.
+
+Long labels truncate; hover to read the full name. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule, or search to filter all three sections. Clicking a settings icon does not open a menu or change its rule. Items are alphabetized left to right and then downward within each section; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
 
 Settings initially shows configured apps, iStat, and discovered system items. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
 
@@ -100,7 +102,7 @@ Workspace notifications handle app launches and exits. A single 60-second mainte
 
 Full iStat signature and resource audits run at startup, after relevant metadata or helper-process changes, on manual request, and hourly. Unchanged minute checks do not launch Python or codesign. Failed checks back off for at least a minute.
 
-System metadata, artwork, and status images are cached. Closed Settings windows skip UI updates; visible rows rebuild only when their contents change. Accessibility discovery reuses overlapping traversal results within each request. Panel/window transition animations and cancelled-drag animations are disabled; drag destination feedback remains. Release builds enable compiler optimization. These changes reduce avoidable work; they are not a measured battery-life claim.
+System metadata, artwork, and status images are cached. Closed Settings windows skip UI updates; visible sections rebuild only when their contents or column count change. Resizing within the same column count reuses existing icon controls. Accessibility discovery reuses overlapping traversal results within each request. Panel/window transition animations and cancelled-drag animations are disabled; drag destination feedback remains. Release builds enable compiler optimization. These changes reduce avoidable work; they are not a measured battery-life claim.
 
 ## iStat Menus compatibility
 
@@ -130,7 +132,7 @@ Inactive copies and backups are retained. Restoring the original helper location
 
 - `main.m`: native UI, persisted rules, menu-bar control, lifecycle handling, and login registration.
 - `VisibilityPolicy.h`: app/system allowlists, panel filtering, and isolated temporary menu visibility.
-- `VisibilityEditor.h`: native icon drag sources, validated row drop targets, and drag feedback.
+- `VisibilityEditor.h`: wrapping grid geometry, native icon drag sources, validated section drop targets, and drag feedback.
 - `SystemDiscovery.swift`: runtime enumeration of system category IDs and names.
 - `SystemDiscovery.h`: installed menu-extra and legacy-host discovery.
 - `SystemCatalog.h`: stable preference keys, category/plugin metadata, names, and symbols.
@@ -154,6 +156,8 @@ Version 0.6.3 was checked live for Settings search, dragging iStat into Hide, an
 Version 0.6.4 replaces the fixed activation delay with host acknowledgement and two matching geometry samples. Live checks opened Battery and iStat menus; click-to-target-ready timings on the development Mac were 184 ms and 125 ms respectively (individual samples, not guaranteed timings). Lungo and Input Method targets were ready in 92 ms and 141 ms; their AX requests timed out, so popup display timing was not established for those apps. The previous code waited 700 ms before beginning target discovery. Local diagnostics report readiness and action-return timings separately.
 
 Version 0.6.5 was checked with Time Machine as the sole loaded SystemUIServer menu extra: its host item disappeared under Hide, reappeared for second-row activation, and the menu action returned success. The native computer-use provider could not read the popup contents. Visibility tests cover exclusive-host hiding, temporary reveal, Always Show, Always Hide, preserving modern system hosts, and leaving shared/unknown hosts allowed.
+
+Version 0.6.7 was checked live at normal and expanded window sizes, with 17 configured Always Show items wrapping onto two rows and the 34-item running-app list wrapping onto three rows. The larger list scrolled vertically; no horizontal scroller was present. Layout tests cover wrapping boundaries, narrow/wide windows, empty drop targets, and non-overlapping in-bounds icon frames through 100 items.
 
 Visibility-transition tests use fake assertions to cover replacement handoff, waiting for acknowledgement, superseded updates, failure, timeout, stale replies, and exact-once release without changing the real menu bar.
 

@@ -1,5 +1,21 @@
 #import <Cocoa/Cocoa.h>
 
+// Fixed icon size and spacing; each section grows downward instead of sideways.
+static NSUInteger MBVisibilityColumns(CGFloat width) {return MAX(1,(NSUInteger)floor(MAX(0,width-8)/56));}
+static CGFloat MBVisibilityHeight(NSUInteger count,CGFloat width) {
+    NSUInteger columns=MBVisibilityColumns(width),rows=MAX(1,(count+columns-1)/columns);
+    return 92+(rows-1)*68;
+}
+static NSRect MBVisibilityIconFrame(NSUInteger index,NSUInteger count,CGFloat width) {
+    NSUInteger columns=MBVisibilityColumns(width);
+    return NSMakeRect(6+(index%columns)*56,MBVisibilityHeight(count,width)-74-(index/columns)*68,52,64);
+}
+@interface MBVisibilityDocument : NSView
+@end
+@implementation MBVisibilityDocument
+- (BOOL)isFlipped {return YES;}
+@end
+
 static NSPasteboardType const MBVisibilityDragType = @"io.github.iamwrm.MenuBarCompact.visibility-item";
 @protocol MBVisibilityEditorDelegate <NSObject>
 - (BOOL)canMoveVisibilityItem:(NSString *)identifier toRule:(NSInteger)rule;

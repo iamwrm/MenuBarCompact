@@ -20,13 +20,16 @@ static NSString *const OwnID = @"io.github.iamwrm.MenuBarCompact";
 static NSString *const ThawID = @"com.stonerl.Thaw";
 static NSString *const IStatID = @"com.bjango.istatmenus.status";
 
-@interface MenuBarCompact : NSObject <NSApplicationDelegate, MBVisibilityEditorDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSPopoverDelegate>
+@interface MenuBarCompact : NSObject <NSApplicationDelegate, MBVisibilityEditorDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSPopoverDelegate, NSWindowDelegate>
 @property NSStatusItem *statusItem;
 @property NSWindow *window;
 @property NSTextField *summaryLabel, *compatibilityLabel, *loginLabel;
 @property NSButton *loginButton, *autoHideButton, *takeOverButton, *toggleButton, *allAppsButton;
 @property NSSearchField *search;
-@property NSArray<NSScrollView *> *visibilityScrolls;
+@property NSScrollView *visibilityEditorScroll;
+@property NSArray<MBVisibilityLane *> *visibilityLanes;
+@property BOOL userResizedSettings, layingOutSettings;
+@property NSArray<NSArray<NSTextField *> *> *visibilityLabels;
 @property NSArray<NSTextField *> *visibilityCounts;
 @property NSMutableDictionary<NSString *,NSNumber *> *rules;
 @property NSMutableDictionary<NSString *,NSString *> *names;
@@ -132,7 +135,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.maintenance.tolerance=10;
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.6"];
+    [self log:@"START MenuBarCompact 0.6.7"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -189,7 +192,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         [rows addObject:@{@"id":identifier,@"name":name?:identifier,@"running":@(self.running[identifier]!=nil),@"pid":@(self.running[identifier].processIdentifier),@"rule":self.rules[identifier]?:@0,@"system":MBSystemItems()[identifier]?:@{}}];
     }
     NSArray *sorted=[rows sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
-    if([sorted isEqual:self.rows])return;self.rows=sorted;
+    self.rows=sorted;
     [self renderVisibilityLanes];
 }
 - (void)visibilityDidFinish:(BOOL)success {
@@ -510,7 +513,8 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     NSButton *button=[NSButton buttonWithTitle:text target:self action:action];button.frame=frame;[self.window.contentView addSubview:button];return button;
 }
 - (void)buildWindow {
-    self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,960,720) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable backing:NSBackingStoreBuffered defer:NO];
+    self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,960,720) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+    self.window.delegate=self;self.window.contentMinSize=NSMakeSize(800,600);
     self.window.title=@"MenuBarCompact";self.window.releasedWhenClosed=NO;self.window.animationBehavior=NSWindowAnimationBehaviorNone;self.renderedLaneRows=[NSMutableDictionary new];
     NSTextField *title=[self label:@"A quieter menu bar." frame:NSMakeRect(28,655,900,35) size:26 secondary:NO];title.font=[NSFont systemFontOfSize:26 weight:NSFontWeightSemibold];
     self.summaryLabel=[self label:@"Starting…" frame:NSMakeRect(28,625,900,24) size:14 secondary:YES];
@@ -519,20 +523,33 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.takeOverButton=[self button:@"Quit Thaw and start" action:@selector(takeOver:) frame:NSMakeRect(725,580,210,32)];
     self.search=[[NSSearchField alloc] initWithFrame:NSMakeRect(28,533,670,30)];self.search.placeholderString=@"Find a configured item";self.search.delegate=self;[self.window.contentView addSubview:self.search];
     self.allAppsButton=[NSButton checkboxWithTitle:@"Show all running apps" target:self action:@selector(toggleAppScope:)];self.allAppsButton.frame=NSMakeRect(720,536,214,24);[self.window.contentView addSubview:self.allAppsButton];
-    NSMutableArray *scrolls=[NSMutableArray new],*counts=[NSMutableArray new];
+    // Header stays at the top when wrapping makes the window taller. Footer
+    // controls stay at the bottom; only the section viewport stretches.
+    for(NSView *view in self.window.contentView.subviews)view.autoresizingMask=NSViewMinYMargin;
+    title.autoresizingMask|=NSViewWidthSizable;self.summaryLabel.autoresizingMask|=NSViewWidthSizable;
+    self.search.autoresizingMask|=NSViewWidthSizable;self.allAppsButton.autoresizingMask|=NSViewMinXMargin;
+    self.takeOverButton.autoresizingMask|=NSViewMinXMargin;
+    self.visibilityEditorScroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(28,208,904,304)];
+    self.visibilityEditorScroll.hasVerticalScroller=YES;self.visibilityEditorScroll.hasHorizontalScroller=NO;
+    self.visibilityEditorScroll.scrollerStyle=NSScrollerStyleOverlay;self.visibilityEditorScroll.horizontalScrollElasticity=NSScrollElasticityNone;
+    self.visibilityEditorScroll.autohidesScrollers=YES;self.visibilityEditorScroll.drawsBackground=NO;
+    self.visibilityEditorScroll.autoresizingMask=NSViewHeightSizable|NSViewWidthSizable;
+    MBVisibilityDocument *document=[[MBVisibilityDocument alloc] initWithFrame:NSMakeRect(0,0,self.visibilityEditorScroll.contentSize.width,304)];
+    self.visibilityEditorScroll.documentView=document;[self.window.contentView addSubview:self.visibilityEditorScroll];
+    NSMutableArray *lanes=[NSMutableArray new],*counts=[NSMutableArray new],*labels=[NSMutableArray new];
     NSArray *titles=@[@"Always Show",@"Hide",@"Always Hide"];
     NSArray *details=@[@"In the menu bar",@"In the second row",@"Option-click to reveal"];
     for(NSInteger rule=0;rule<3;rule++){
-        CGFloat y=420-rule*106;
-        NSTextField *heading=[self label:titles[rule] frame:NSMakeRect(28,y+56,148,22) size:14 secondary:NO];heading.font=[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-        [self label:details[rule] frame:NSMakeRect(28,y+34,148,18) size:10 secondary:YES];
-        [counts addObject:[self label:@"" frame:NSMakeRect(28,y+12,148,18) size:10 secondary:YES]];
-        NSScrollView *scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(184,y,748,92)];scroll.hasHorizontalScroller=YES;scroll.autohidesScrollers=YES;scroll.drawsBackground=NO;
-        MBVisibilityLane *lane=[[MBVisibilityLane alloc] initWithFrame:NSMakeRect(0,0,748,92)];lane.rule=rule;lane.editorDelegate=self;lane.accessibilityLabel=[titles[rule] stringByAppendingString:@" drop area"];
-        scroll.documentView=lane;[self.window.contentView addSubview:scroll];[scrolls addObject:scroll];
+        NSTextField *heading=[NSTextField labelWithString:titles[rule]];heading.font=[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+        NSTextField *detail=[NSTextField labelWithString:details[rule]];detail.font=[NSFont systemFontOfSize:10];detail.textColor=NSColor.secondaryLabelColor;
+        NSTextField *count=[NSTextField labelWithString:@""];count.font=[NSFont systemFontOfSize:10];count.textColor=NSColor.secondaryLabelColor;
+        for(NSView *label in @[heading,detail,count])[document addSubview:label];
+        [labels addObject:@[heading,detail,count]];[counts addObject:count];
+        MBVisibilityLane *lane=[[MBVisibilityLane alloc] initWithFrame:NSZeroRect];lane.rule=rule;lane.editorDelegate=self;lane.accessibilityLabel=[titles[rule] stringByAppendingString:@" drop area"];
+        [document addSubview:lane];[lanes addObject:lane];
     }
-    self.visibilityScrolls=scrolls;self.visibilityCounts=counts;
-    [self label:@"Drag icons between rows to change visibility. Scroll sideways to see more." frame:NSMakeRect(28,166,905,21) size:12 secondary:YES];
+    self.visibilityLanes=lanes;self.visibilityCounts=counts;self.visibilityLabels=labels;
+    [self label:@"Drag icons between sections to change visibility. Icons wrap automatically." frame:NSMakeRect(28,166,905,21) size:12 secondary:YES];
     self.autoHideButton=[NSButton checkboxWithTitle:@"Close panel after 15 seconds" target:self action:@selector(toggleAutoHide:)];self.autoHideButton.frame=NSMakeRect(28,122,320,24);self.autoHideButton.state=[NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]?1:0;[self.window.contentView addSubview:self.autoHideButton];
     self.loginButton=[NSButton checkboxWithTitle:@"Launch at login" target:self action:@selector(toggleLogin:)];self.loginButton.frame=NSMakeRect(420,122,350,24);[self.window.contentView addSubview:self.loginButton];
     self.loginLabel=[self label:@"" frame:NSMakeRect(420,96,370,22) size:11 secondary:YES];
@@ -540,8 +557,16 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.6 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
-    [self.window center];
+    [self label:@"MenuBarCompact 0.6.7 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    self.userResizedSettings=YES;
+    self.userResizedSettings=[self.window setFrameUsingName:@"MenuBarCompact.Settings"];
+    if(!self.userResizedSettings)[self.window center];
+    [self.window setFrameAutosaveName:@"MenuBarCompact.Settings"];
+}
+- (void)windowWillStartLiveResize:(NSNotification *)notification {self.userResizedSettings=YES;}
+- (BOOL)windowShouldZoom:(NSWindow *)window toFrame:(NSRect)frame {self.userResizedSettings=YES;return YES;}
+- (void)windowDidResize:(NSNotification *)notification {
+    if(self.visibilityLanes.count && !self.layingOutSettings)[self renderVisibilityLanes];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self.window makeKeyAndOrderFront:nil];[self refreshApps];[self updateUI];[self updateLoginUI];[NSApp activateIgnoringOtherApps:YES];}
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)visible {if(!self.overflow.shown)[self showSettings:nil];return YES;}
@@ -556,33 +581,58 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self saveRules];[self rebuildRows];[self applyVisibility];
 }
 - (void)renderVisibilityLanes {
+    if(self.layingOutSettings)return;self.layingOutSettings=YES;
     NSArray *titles=@[@"Always Show",@"Hide",@"Always Hide"];
-    const CGFloat itemWidth=52, itemSpacing=56, horizontalInset=6;
-    for(NSUInteger rule=0;rule<self.visibilityScrolls.count;rule++){
-        NSScrollView *scroll=self.visibilityScrolls[rule];MBVisibilityLane *lane=(MBVisibilityLane *)scroll.documentView;
-        CGFloat previousX=scroll.contentView.bounds.origin.x;
-        NSMutableArray *items=[NSMutableArray new];
-        for(NSDictionary *row in self.rows){NSInteger value=[self protectedID:row[@"id"]]?0:MIN(2,MAX(0,[row[@"rule"] integerValue]));if(value==(NSInteger)rule)[items addObject:row];}
-        NSArray *renderKey=@[[items copy],@(self.search.stringValue.length>0)];
+    NSMutableArray<NSMutableArray *> *groups=[NSMutableArray new];for(NSUInteger rule=0;rule<3;rule++)[groups addObject:[NSMutableArray new]];
+    for(NSDictionary *row in self.rows){NSInteger rule=[self protectedID:row[@"id"]]?0:MIN(2,MAX(0,[row[@"rule"] integerValue]));[groups[rule] addObject:row];}
+    CGFloat width=self.visibilityEditorScroll.contentSize.width-156,totalHeight=28;
+    for(NSArray *items in groups)totalHeight+=MBVisibilityHeight(items.count,width);
+    // Fit ordinary wrapped sections on screen; very large app lists scroll
+    // vertically as one page. Filtering does not resize the window per keystroke.
+    if(!self.userResizedSettings && !self.search.stringValue.length){
+        NSRect screen=(self.window.screen?:NSScreen.mainScreen).visibleFrame;
+        CGFloat maxHeight=[self.window contentRectForFrameRect:screen].size.height-16;
+        CGFloat height=MIN(maxHeight,720+MAX(0,totalHeight-304));
+        if(fabs(self.window.contentView.bounds.size.height-height)>0.5){
+            NSRect frame=self.window.frame;CGFloat oldHeight=frame.size.height;
+            frame.size.height=[self.window frameRectForContentRect:NSMakeRect(0,0,self.window.contentView.bounds.size.width,height)].size.height;
+            frame.origin.y=MAX(NSMinY(screen),MIN(frame.origin.y+oldHeight-frame.size.height,NSMaxY(screen)-frame.size.height));
+            [self.window setFrame:frame display:YES animate:NO];
+        }
+    }
+    NSView *document=self.visibilityEditorScroll.documentView;
+    document.frame=NSMakeRect(0,0,self.visibilityEditorScroll.contentSize.width,totalHeight);
+    CGFloat y=0;
+    for(NSUInteger rule=0;rule<self.visibilityLanes.count;rule++){
+        NSArray *items=groups[rule];MBVisibilityLane *lane=self.visibilityLanes[rule];CGFloat height=MBVisibilityHeight(items.count,width);
+        lane.frame=NSMakeRect(156,y,width,height);
+        self.visibilityLabels[rule][0].frame=NSMakeRect(0,y+18,148,22);
+        self.visibilityLabels[rule][1].frame=NSMakeRect(0,y+40,148,18);
+        self.visibilityLabels[rule][2].frame=NSMakeRect(0,y+62,148,18);
+        y+=height+14;
+        NSArray *renderKey=@[[items copy],@(self.search.stringValue.length>0),@(MBVisibilityColumns(width))];
         if([renderKey isEqual:self.renderedLaneRows[@(rule)]])continue;
         self.renderedLaneRows[@(rule)]=renderKey;
         for(NSView *view in lane.subviews.copy)[view removeFromSuperview];
         self.visibilityCounts[rule].stringValue=[NSString stringWithFormat:@"%lu item%@",(unsigned long)items.count,items.count==1?@"":@"s"];
-        lane.frame=NSMakeRect(0,0,MAX(scroll.contentSize.width,items.count*itemSpacing+2*horizontalInset),scroll.contentSize.height);
-        CGFloat x=horizontalInset;
+        NSUInteger index=0;
         for(NSDictionary *row in items){
             NSString *identifier=row[@"id"],*name=row[@"name"];BOOL locked=[self protectedID:identifier];
-            MBVisibilityIcon *icon=[[MBVisibilityIcon alloc] initWithFrame:NSMakeRect(x,10,itemWidth,64)];
+            MBVisibilityIcon *icon=[[MBVisibilityIcon alloc] initWithFrame:MBVisibilityIconFrame(index++,items.count,width)];
             icon.identifier=identifier;icon.title=name;icon.font=[NSFont systemFontOfSize:10];icon.bordered=NO;icon.imagePosition=NSImageAbove;
             NSImage *image=[[self rowIconForIdentifier:identifier name:name] copy];image.size=NSMakeSize(24,24);icon.image=image;icon.imageScaling=NSImageScaleProportionallyDown;
             icon.cell.lineBreakMode=NSLineBreakByTruncatingTail;icon.movable=!locked;
             icon.accessibilityLabel=[NSString stringWithFormat:@"%@ — %@%@",name,titles[rule],locked?@" (protected)":@""];
-            icon.toolTip=[NSString stringWithFormat:@"%@\n%@",name,locked?@"Kept visible":@"Drag to another row to change visibility"];
-            [lane addSubview:icon];x+=itemSpacing;
+            icon.toolTip=[NSString stringWithFormat:@"%@\n%@",name,locked?@"Kept visible":@"Drag to another section to change visibility"];
+            [lane addSubview:icon];
         }
-        if(!items.count){NSTextField *empty=[NSTextField labelWithString:self.search.stringValue.length?@"No matching items in this row":@"Drop icons here"];empty.textColor=NSColor.tertiaryLabelColor;empty.font=[NSFont systemFontOfSize:12];empty.frame=NSMakeRect(20,32,400,20);[lane addSubview:empty];}
-        [scroll.contentView scrollToPoint:NSMakePoint(MIN(previousX,MAX(0,lane.frame.size.width-scroll.contentSize.width)),0)];[scroll reflectScrolledClipView:scroll.contentView];lane.needsDisplay=YES;
+        if(!items.count){NSTextField *empty=[NSTextField labelWithString:self.search.stringValue.length?@"No matching items in this section":@"Drop icons here"];empty.textColor=NSColor.tertiaryLabelColor;empty.font=[NSFont systemFontOfSize:12];empty.frame=NSMakeRect(20,32,400,20);[lane addSubview:empty];}
+        lane.needsDisplay=YES;
     }
+    NSClipView *clip=self.visibilityEditorScroll.contentView;
+    [clip scrollToPoint:NSMakePoint(0,MIN(clip.bounds.origin.y,MAX(0,totalHeight-clip.bounds.size.height)))];
+    [self.visibilityEditorScroll reflectScrolledClipView:clip];
+    self.layingOutSettings=NO;
 }
 - (void)controlTextDidChange:(NSNotification *)notification {[self rebuildRows];}
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)app {

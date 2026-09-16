@@ -16,3 +16,5 @@ xcrun clang -fobjc-arc -Wall -Wextra -Wno-unused-function -framework Cocoa -fram
 "$TEST_BUILD_DIR/menu-discovery"
 xcrun clang -fobjc-arc -Wno-unused-function -framework Cocoa -framework ServiceManagement -framework ApplicationServices tests/visibility_transition.m -o "$TEST_BUILD_DIR/visibility-transition"
 "$TEST_BUILD_DIR/visibility-transition"
+xcrun clang -fobjc-arc -Wno-unused-function -framework Cocoa tests/visibility_layout.m -o "$TEST_BUILD_DIR/visibility-layout"
+"$TEST_BUILD_DIR/visibility-layout"
