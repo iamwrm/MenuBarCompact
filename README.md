@@ -4,6 +4,13 @@ A small, native menu-bar manager for macOS 27. Keep selected apps visible, tuck 
 
 MenuBarCompact is an experimental AppKit application with per-app visibility rules, launch-at-login support, and an automatic compatibility workaround for iStat Menus 7. It runs independently of Thaw.
 
+
+<img width="340" height="72" alt="image" src="https://github.com/user-attachments/assets/ab248472-75ff-47ab-bbed-299f33d4be66" />
+
+<img width="807" height="813" alt="image" src="https://github.com/user-attachments/assets/cc475dfe-e435-4236-b104-11436fc43724" />
+
+
+
 ## Features
 
 - Three **Always Show**, **Hide**, and **Always Hide** sections: drag icons between sections to save visibility rules immediately. Icons wrap onto additional rows instead of scrolling horizontally.
