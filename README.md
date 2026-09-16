@@ -38,15 +38,15 @@ Release builds use no Apple signing certificate or notarization. macOS may requi
 
 The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
 
-Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.5`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.6`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
 
 To build the same package locally:
 
 ```sh
-./scripts/package-release.sh 0.6.5
+./scripts/package-release.sh 0.6.6
 ```
 
-Output: `dist/MenuBarCompact-0.6.5-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
+Output: `dist/MenuBarCompact-0.6.6-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
@@ -80,7 +80,7 @@ If an app exposes multiple status controls or no identifiable control, the panel
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
-Settings has three horizontal icon rows. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule. Scroll sideways to reach more icons, or search to filter all three rows. Clicking a settings icon does not open a menu or change its rule. Items are alphabetized within each row; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
+Settings has three horizontal icon rows with compact 56-point spacing, fitting 13 complete icons in the standard window. Long labels truncate; hover to read the full name. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule. Scroll sideways to reach more icons, or search to filter all three rows. Clicking a settings icon does not open a menu or change its rule. Items are alphabetized within each row; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
 
 Settings initially shows configured apps, iStat, and discovered system items. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
 

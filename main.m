@@ -132,7 +132,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.maintenance.tolerance=10;
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.5"];
+    [self log:@"START MenuBarCompact 0.6.6"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -540,7 +540,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.5 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.6.6 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self.window makeKeyAndOrderFront:nil];[self refreshApps];[self updateUI];[self updateLoginUI];[NSApp activateIgnoringOtherApps:YES];}
@@ -557,6 +557,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 }
 - (void)renderVisibilityLanes {
     NSArray *titles=@[@"Always Show",@"Hide",@"Always Hide"];
+    const CGFloat itemWidth=52, itemSpacing=56, horizontalInset=6;
     for(NSUInteger rule=0;rule<self.visibilityScrolls.count;rule++){
         NSScrollView *scroll=self.visibilityScrolls[rule];MBVisibilityLane *lane=(MBVisibilityLane *)scroll.documentView;
         CGFloat previousX=scroll.contentView.bounds.origin.x;
@@ -567,17 +568,17 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         self.renderedLaneRows[@(rule)]=renderKey;
         for(NSView *view in lane.subviews.copy)[view removeFromSuperview];
         self.visibilityCounts[rule].stringValue=[NSString stringWithFormat:@"%lu item%@",(unsigned long)items.count,items.count==1?@"":@"s"];
-        lane.frame=NSMakeRect(0,0,MAX(scroll.contentSize.width,items.count*76+16),scroll.contentSize.height);
-        CGFloat x=8;
+        lane.frame=NSMakeRect(0,0,MAX(scroll.contentSize.width,items.count*itemSpacing+2*horizontalInset),scroll.contentSize.height);
+        CGFloat x=horizontalInset;
         for(NSDictionary *row in items){
             NSString *identifier=row[@"id"],*name=row[@"name"];BOOL locked=[self protectedID:identifier];
-            MBVisibilityIcon *icon=[[MBVisibilityIcon alloc] initWithFrame:NSMakeRect(x,10,72,64)];
+            MBVisibilityIcon *icon=[[MBVisibilityIcon alloc] initWithFrame:NSMakeRect(x,10,itemWidth,64)];
             icon.identifier=identifier;icon.title=name;icon.font=[NSFont systemFontOfSize:10];icon.bordered=NO;icon.imagePosition=NSImageAbove;
             NSImage *image=[[self rowIconForIdentifier:identifier name:name] copy];image.size=NSMakeSize(24,24);icon.image=image;icon.imageScaling=NSImageScaleProportionallyDown;
             icon.cell.lineBreakMode=NSLineBreakByTruncatingTail;icon.movable=!locked;
             icon.accessibilityLabel=[NSString stringWithFormat:@"%@ — %@%@",name,titles[rule],locked?@" (protected)":@""];
             icon.toolTip=[NSString stringWithFormat:@"%@\n%@",name,locked?@"Kept visible":@"Drag to another row to change visibility"];
-            [lane addSubview:icon];x+=76;
+            [lane addSubview:icon];x+=itemSpacing;
         }
         if(!items.count){NSTextField *empty=[NSTextField labelWithString:self.search.stringValue.length?@"No matching items in this row":@"Drop icons here"];empty.textColor=NSColor.tertiaryLabelColor;empty.font=[NSFont systemFontOfSize:12];empty.frame=NSMakeRect(20,32,400,20);[lane addSubview:empty];}
         [scroll.contentView scrollToPoint:NSMakePoint(MIN(previousX,MAX(0,lane.frame.size.width-scroll.contentSize.width)),0)];[scroll reflectScrolledClipView:scroll.contentView];lane.needsDisplay=YES;
