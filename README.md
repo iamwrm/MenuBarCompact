@@ -6,7 +6,7 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 
 ## Features
 
-- **Always show**, **Hide**, and **Always hide** rules for application bundles.
+- Three horizontal **Always Show**, **Hide**, and **Always Hide** rows: drag icons between rows to save visibility rules immediately.
 - Automatic discovery of macOS system categories and installed menu extras, including **Time Machine**, with persistent visibility rules.
 - System items rescan at startup, once a minute, and through **Rescan system items**.
 - Click the menu-bar button to open a shallow second row of icons beneath it; Option-click includes Always hide.
@@ -60,6 +60,8 @@ If an app exposes multiple status controls or no identifiable control, the panel
 
 Right-click the menu-bar button for Settings and quick controls. Reopening the app also opens Settings.
 
+Settings has three horizontal icon rows. Drag an icon into **Always Show**, **Hide**, or **Always Hide** to change its rule. Scroll sideways to reach more icons, search to filter all three rows, or click an icon for a keyboard-accessible visibility menu. Items are alphabetized within each row; dragging changes their visibility group, not their order in the macOS menu bar. Locked icons remain in Always Show.
+
 Settings initially shows configured apps, iStat, and discovered system items. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
 
 System discovery reads the OS’s `MBSystemItemIdentifier.allCases` and string names, then scans `/System/Library/CoreServices/Menu Extras/*.menu` metadata. Category numbers and the list of plug-ins are not hard-coded. The tested macOS build exposes nine categories and eight additional menu extras; Spotlight’s existing compatibility adapter supplies one more entry. A few display-name, icon, protected-item, and compatibility mappings remain intentional.
@@ -100,6 +102,7 @@ Inactive copies and backups are retained. Restoring the original helper location
 
 - `main.m`: native UI, persisted rules, menu-bar control, lifecycle handling, and login registration.
 - `VisibilityPolicy.h`: app/system allowlists, panel filtering, and isolated temporary menu visibility.
+- `VisibilityEditor.h`: native icon drag sources, validated row drop targets, and drag feedback.
 - `SystemDiscovery.swift`: runtime enumeration of system category IDs and names.
 - `SystemDiscovery.h`: installed menu-extra and legacy-host discovery.
 - `SystemCatalog.h`: stable preference keys, category/plugin metadata, names, and symbols.
@@ -113,6 +116,8 @@ Inactive copies and backups are retained. Restoring the original helper location
 
 Local validation covered hiding/revealing with iStat retained, rule persistence, quitting/relaunching, conflict handling with Thaw, and opening the overflow panel while keeping the main bar compact. Live checks confirmed original Box, Lungo, Battery, Input Method, and discovered Time Machine menus after replacing a stale Accessibility entry. Permission remained valid across subsequent certificate-signed updates. Spotlight discovery and fallback event delivery were checked, but its search interface did not appear; a direct click on its original icon had the same result on this macOS build. Spotlight launch therefore remains unverified. Menu-bar presence was checked through macOS accessibility; that does not verify every rendered meter or interaction. An actual logout/login, sleep/wake cycle, and multiple-display behavior have not been comprehensively tested.
 
+The three-row editor was checked with native drag gestures across all three groups, a drop outside the rows, protected Clock rejection, search filtering, and rule persistence across a signed-app restart. Test visibility changes were restored afterward.
+
 The compatibility tests cover unchanged copies, executable updates, resource-only updates, absent installations, unexpected helper paths, rollback preservation, and legacy migration.
 
 Discovery tests cover runtime enumeration, an unknown future category with a nonsequential numeric ID, new plug-ins, default visibility, old preference keys, protected items, and obsolete synthetic IDs. Native visibility-policy tests also cover system-only activation, independent Battery changes, Input Method and Spotlight identities, protected items, both legacy reveal modes, panel filtering, and temporary visibility limited to the selected item. Battery and Spotlight hide/reveal behavior was checked live on macOS 27; the input-menu control is unlabeled in the host's accessibility tree, limiting automated identification.
@@ -121,7 +126,7 @@ Logs stay local at `~/Library/Application Support/MenuBarCompact/events.log`. Pr
 
 ## Current limitations
 
-Third-party visibility is per app bundle, not per individual icon. Discovered system categories and menu extras have separate rules. Per-item hiding of every legacy plug-in has not been visually verified. Drag-to-reorder layouts, hover/scroll reveal, and global hotkeys are not implemented. Panel icons represent apps, not live meter contents. Menu activation depends on each app’s Accessibility support; native menus retain their original location and are not embedded in the panel. The one temporarily revealed item may still overflow a crowded or notched menu bar.
+Third-party visibility is per app bundle, not per individual icon. Discovered system categories and menu extras have separate rules. Per-item hiding of every legacy plug-in has not been visually verified. Reordering icons within a row or the actual menu bar, hover/scroll reveal, and global hotkeys are not implemented. Panel icons represent apps, not live meter contents. Menu activation depends on each app’s Accessibility support; native menus retain their original location and are not embedded in the panel. The one temporarily revealed item may still overflow a crowded or notched menu bar.
 
 The menu-bar API is loaded dynamically and checked at runtime. The implementation does not require a private entitlement or changes to OS security settings. There is no dependency on Thaw's binary or source code.
 
