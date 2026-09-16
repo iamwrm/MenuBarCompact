@@ -97,15 +97,21 @@ static BOOL MBMenuClickPoint(CGPoint origin,CGSize dimensions,NSArray<NSValue *>
     }
     return NO;
 }
-static AXError MBClickMenuTarget(AXUIElementRef element) {
+static NSValue *MBMenuTargetScreenRect(id target) {
+    AXUIElementRef element=(__bridge AXUIElementRef)target;
     id position=MBAXValue(element,kAXPositionAttribute),size=MBAXValue(element,kAXSizeAttribute);
-    if(!position || !size || CFGetTypeID((__bridge CFTypeRef)position)!=AXValueGetTypeID() || CFGetTypeID((__bridge CFTypeRef)size)!=AXValueGetTypeID())return kAXErrorActionUnsupported;
+    if(!position || !size || CFGetTypeID((__bridge CFTypeRef)position)!=AXValueGetTypeID() || CFGetTypeID((__bridge CFTypeRef)size)!=AXValueGetTypeID())return nil;
     CGPoint origin;CGSize dimensions;
-    if(!AXValueGetValue((__bridge AXValueRef)position,kAXValueCGPointType,&origin) || !AXValueGetValue((__bridge AXValueRef)size,kAXValueCGSizeType,&dimensions))return kAXErrorActionUnsupported;
+    if(!AXValueGetValue((__bridge AXValueRef)position,kAXValueCGPointType,&origin) || !AXValueGetValue((__bridge AXValueRef)size,kAXValueCGSizeType,&dimensions))return nil;
     CGDirectDisplayID displays[32];uint32_t count=0;NSMutableArray *frames=[NSMutableArray new];
-    if(CGGetActiveDisplayList(32,displays,&count)!=kCGErrorSuccess)return kAXErrorFailure;
+    if(CGGetActiveDisplayList(32,displays,&count)!=kCGErrorSuccess)return nil;
     for(uint32_t i=0;i<count;i++)[frames addObject:[NSValue valueWithRect:NSRectFromCGRect(CGDisplayBounds(displays[i]))]];
-    CGPoint point;if(!MBMenuClickPoint(origin,dimensions,frames,&point))return kAXErrorActionUnsupported;
+    CGPoint point;if(!MBMenuClickPoint(origin,dimensions,frames,&point))return nil;
+    return [NSValue valueWithRect:NSMakeRect(origin.x,origin.y,dimensions.width,dimensions.height)];
+}
+static AXError MBClickMenuTarget(AXUIElementRef element) {
+    NSValue *rect=MBMenuTargetScreenRect((__bridge id)element);if(!rect)return kAXErrorActionUnsupported;
+    CGPoint point=CGPointMake(NSMidX(rect.rectValue),NSMidY(rect.rectValue));
     CGEventRef current=CGEventCreate(NULL);CGPoint previous=current?CGEventGetLocation(current):point;if(current)CFRelease(current);
     CGEventRef down=CGEventCreateMouseEvent(NULL,kCGEventLeftMouseDown,point,kCGMouseButtonLeft);
     CGEventRef up=CGEventCreateMouseEvent(NULL,kCGEventLeftMouseUp,point,kCGMouseButtonLeft);

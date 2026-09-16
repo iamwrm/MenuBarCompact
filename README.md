@@ -38,15 +38,15 @@ Release builds use no Apple signing certificate or notarization. macOS may requi
 
 The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
 
-Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.3`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.4`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
 
 To build the same package locally:
 
 ```sh
-./scripts/package-release.sh 0.6.3
+./scripts/package-release.sh 0.6.4
 ```
 
-Output: `dist/MenuBarCompact-0.6.3-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
+Output: `dist/MenuBarCompact-0.6.4-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
@@ -74,7 +74,7 @@ Enable **Launch at login** in Settings to start automatically. When replacing an
 
 Opening either panel leaves the main menu bar compact. Closed apps are omitted. The second row has no tiles, labels, or header. Hover an icon for its name. It scrolls horizontally when necessary. Artwork comes from installed apps’ bundled menu glyphs where available, with application-icon and system-symbol fallbacks. These are representative icons, not live screenshots or status updates.
 
-Select an icon to request its original menu. The app searches both the host’s system extras and its status windows, briefly retries delayed discovery, and uses a position-checked menu-bar click only when a control explicitly rejects Accessibility activation. A timed-out press is never repeated. iStat rejects the AX activation request on this macOS build, so its uniquely identified host control uses one position-checked click directly. If access is missing, clicking an icon opens the permission page; enable MenuBarCompact in macOS **Device Control and Data Access** (Accessibility). Only the selected item is temporarily allowed back into the menu bar while its menu opens. Other hidden items stay hidden. The selected item hides again after a click, Escape, or a 30-second fallback timeout. No Screen Recording permission is needed.
+Select an icon to request its original menu. The app searches both the host’s system extras and its status windows, briefly retries delayed discovery, and uses a position-checked menu-bar click only when a control explicitly rejects Accessibility activation. A timed-out press is never repeated. iStat rejects the AX activation request on this macOS build, so its uniquely identified host control uses one position-checked click directly. If access is missing, clicking an icon opens the permission page; enable MenuBarCompact in macOS **Device Control and Data Access** (Accessibility). Only the selected item is temporarily allowed back into the menu bar while its menu opens. The previous visibility restriction stays active until its replacement is acknowledged, avoiding an unrestricted gap. Activation then checks for a stable, on-screen target immediately, with short bounded retries while the host lays it out; there is no fixed 700 ms delay. The panel closes as soon as an icon is selected. A moving, ambiguous, or unavailable target is never clicked. Other hidden items stay hidden. The selected item hides again after a click, Escape, or a 30-second fallback timeout. No Screen Recording permission is needed.
 
 If an app exposes multiple status controls or no identifiable control, the panel reports that direct selection is unavailable rather than pressing an arbitrary control. Certificate-backed builds preserve the app’s signing identity across updates. Switching signing identities still requires a fresh permission grant.
 
@@ -150,6 +150,10 @@ iStat visibility tests cover all three choices, default visibility, second-row f
 The three-row editor was checked with native drag gestures across all three groups, a drop outside the rows, protected Clock rejection, search filtering, and rule persistence across a signed-app restart. Test visibility changes were restored afterward.
 
 Version 0.6.3 was checked live for Settings search, dragging iStat into Hide, and opening native Battery and iStat menus from the second row. Test rule changes were restored.
+
+Version 0.6.4 replaces the fixed activation delay with host acknowledgement and two matching geometry samples. Live checks opened Battery and iStat menus; click-to-target-ready timings on the development Mac were 184 ms and 125 ms respectively (individual samples, not guaranteed timings). Lungo and Input Method targets were ready in 92 ms and 141 ms; their AX requests timed out, so popup display timing was not established for those apps. The previous code waited 700 ms before beginning target discovery. Local diagnostics report readiness and action-return timings separately.
+
+Visibility-transition tests use fake assertions to cover replacement handoff, waiting for acknowledgement, superseded updates, failure, timeout, stale replies, and exact-once release without changing the real menu bar.
 
 Accessibility traversal tests cover overlapping roots, one query per shared control, leaf selection, open-menu isolation, and exhausted request budgets.
 

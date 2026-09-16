@@ -14,3 +14,5 @@ xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation tests/maintenance_pol
 "$TEST_BUILD_DIR/maintenance-policy"
 xcrun clang -fobjc-arc -Wall -Wextra -Wno-unused-function -framework Cocoa -framework ApplicationServices tests/menu_discovery.m -o "$TEST_BUILD_DIR/menu-discovery"
 "$TEST_BUILD_DIR/menu-discovery"
+xcrun clang -fobjc-arc -Wno-unused-function -framework Cocoa -framework ServiceManagement -framework ApplicationServices tests/visibility_transition.m -o "$TEST_BUILD_DIR/visibility-transition"
+"$TEST_BUILD_DIR/visibility-transition"

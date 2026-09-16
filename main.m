@@ -32,7 +32,8 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 @property NSMutableDictionary<NSString *,NSString *> *names;
 @property NSArray<NSDictionary *> *rows;
 @property NSDictionary<NSString *,NSRunningApplication *> *running;
-@property id assertion;
+@property id assertion, settledAssertion;
+@property(copy) void (^visibilityReadyHandler)(BOOL);
 @property NSArray *lastAllowlist, *lastSystemAllowlist;
 @property NSTimer *rehideTimer, *maintenance, *activationTimeout;
 @property NSArray *verifiedCompatibilityFingerprint;
@@ -131,7 +132,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.maintenance.tolerance=10;
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.3"];
+    [self log:@"START MenuBarCompact 0.6.4"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -191,35 +192,45 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if([sorted isEqual:self.rows])return;self.rows=sorted;
     [self renderVisibilityLanes];
 }
+- (void)visibilityDidFinish:(BOOL)success {
+    void (^handler)(BOOL)=self.visibilityReadyHandler;self.visibilityReadyHandler=nil;
+    if(handler)dispatch_async(dispatch_get_main_queue(),^{handler(success);});
+}
 - (void)releaseRestriction {
     self.generation++;self.activationPending=NO;[self.activationTimeout invalidate];self.activationTimeout=nil;
-    if(self.assertion){[self.assertion invalidate];self.assertion=nil;[self log:@"RELEASE visibility restriction"];}
+    id current=self.assertion;self.assertion=nil;
+    if(current){[current invalidate];[self log:@"RELEASE visibility restriction"];}
+    if(self.settledAssertion!=current)[self.settledAssertion invalidate];self.settledAssertion=nil;
     self.lastAllowlist=nil;self.lastSystemAllowlist=nil;
 }
 - (void)applyVisibility {
-    if(self.paused)return;
-    if(!self.discoveryReady){[self releaseRestriction];self.stateMessage=@"System item discovery unavailable; hiding is paused";[self updateUI];return;}
-    if(self.running[ThawID]){[self releaseRestriction];self.stateMessage=@"Paused while Thaw is running";[self updateUI];return;}
-    if(!self.ready){[self releaseRestriction];self.stateMessage=@"Waiting for iStat compatibility";[self updateUI];return;}
+    if(self.paused){[self visibilityDidFinish:NO];return;}
+    if(!self.discoveryReady){[self releaseRestriction];self.stateMessage=@"System item discovery unavailable; hiding is paused";[self updateUI];[self visibilityDidFinish:NO];return;}
+    if(self.running[ThawID]){[self releaseRestriction];self.stateMessage=@"Paused while Thaw is running";[self updateUI];[self visibilityDidFinish:NO];return;}
+    if(!self.ready){[self releaseRestriction];self.stateMessage=@"Waiting for iStat compatibility";[self updateUI];[self visibilityDidFinish:NO];return;}
     NSDictionary *effectiveRules=MBInteractionRules(self.rules,self.activeItem);
     NSDictionary *plan=MBVisibilityPlan(self.running.allKeys,effectiveRules,OwnID,Collapsed);
     NSUInteger excluded=[plan[@"excluded"] unsignedIntegerValue];
     NSArray *systems=plan[@"systems"];
-    if(self.mode==Everything || excluded==0){[self releaseRestriction];self.stateMessage=self.mode==Everything?@"Showing all items":@"All configured items are visible";[self updateUI];return;}
+    if(self.mode==Everything || excluded==0){[self releaseRestriction];self.stateMessage=self.mode==Everything?@"Showing all items":@"All configured items are visible";[self updateUI];[self visibilityDidFinish:YES];return;}
     NSArray *bundles=plan[@"bundles"];
     if(self.assertion && [bundles isEqual:self.lastAllowlist] && [systems isEqual:self.lastSystemAllowlist]){
         if(!self.activationPending)self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";
-        [self updateUI];return;
+        [self updateUI];if(!self.activationPending)[self visibilityDidFinish:YES];return;
     }
-    [self releaseRestriction];
+    // Keep the last successful restriction until its replacement is active.
+    // Releasing first briefly exposes every icon and forces two full layouts.
+    self.generation++;[self.activationTimeout invalidate];self.activationTimeout=nil;
+    if(self.assertion!=self.settledAssertion)[self.assertion invalidate];
+    self.assertion=nil;self.activationPending=NO;
     Class configuration=NSClassFromString(@"MBAssessmentModeConfiguration"), assertion=NSClassFromString(@"MBAssessmentModeAssertion");
     if(!configuration || !assertion || ![configuration instancesRespondToSelector:@selector(initWithAllowedSystemItems:allowedBundleIdentifiers:)] || ![assertion instancesRespondToSelector:@selector(activateWithConfiguration:completionHandler:)] || ![assertion instancesRespondToSelector:@selector(invalidate)]){
-        self.stateMessage=@"Hiding is unavailable on this macOS version";[self updateUI];return;
+        [self releaseRestriction];self.stateMessage=@"Hiding is unavailable on this macOS version";[self updateUI];[self visibilityDidFinish:NO];return;
     }
     @try {
         id config=[[configuration alloc] initWithAllowedSystemItems:systems allowedBundleIdentifiers:bundles];
         self.assertion=[assertion new];
-        if(!config || !self.assertion){[self releaseRestriction];self.stateMessage=@"Could not start hiding; all items remain visible";[self updateUI];return;}
+        if(!config || !self.assertion){[self releaseRestriction];self.stateMessage=@"Could not start hiding; all items remain visible";[self updateUI];[self visibilityDidFinish:NO];return;}
         self.lastAllowlist=bundles;self.lastSystemAllowlist=systems;self.activationPending=YES;
         NSUInteger revision=self.generation;
         self.stateMessage=@"Updating menu bar…";
@@ -228,19 +239,19 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
                 if(revision!=self.generation)return;
                 self.activationPending=NO;[self.activationTimeout invalidate];self.activationTimeout=nil;
                 if(error){[self releaseRestriction];self.stateMessage=@"Could not hide apps; all items remain visible";[self log:[NSString stringWithFormat:@"ACTIVATE failed: %@",error]];}
-                else {self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=%@",(long)self.mode,(unsigned long)excluded,[bundles containsObject:IStatID]?@"allowed":@"hidden"]];}
-                [self updateUI];
+                else {if(self.settledAssertion!=self.assertion)[self.settledAssertion invalidate];self.settledAssertion=self.assertion;self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=%@",(long)self.mode,(unsigned long)excluded,[bundles containsObject:IStatID]?@"allowed":@"hidden"]];}
+                [self updateUI];[self visibilityDidFinish:error==nil];
             });
         }];
         // Do not retain an uncertain assertion indefinitely if the private host stops replying.
         self.activationTimeout=[NSTimer scheduledTimerWithTimeInterval:5 repeats:NO block:^(NSTimer *timer){
-            if(revision==self.generation && self.activationPending){[self releaseRestriction];self.stateMessage=@"Menu bar did not respond; hiding is paused";[self updateUI];}
+            if(revision==self.generation && self.activationPending){[self releaseRestriction];self.stateMessage=@"Menu bar did not respond; hiding is paused";[self updateUI];[self visibilityDidFinish:NO];}
         }];
-    } @catch(NSException *exception){[self releaseRestriction];self.stateMessage=@"Hiding is unavailable; all items remain visible";[self log:exception.reason];}
+    } @catch(NSException *exception){[self releaseRestriction];self.stateMessage=@"Hiding is unavailable; all items remain visible";[self log:exception.reason];[self visibilityDidFinish:NO];}
     [self updateUI];
 }
 - (void)finishInteraction {
-    self.interactionGeneration++;
+    self.interactionGeneration++;self.visibilityReadyHandler=nil;
     [self.interactionTimer invalidate];self.interactionTimer=nil;
     if(self.outsideMonitor){[NSEvent removeMonitor:self.outsideMonitor];self.outsideMonitor=nil;}
     if(self.activeItem){self.activeItem=nil;[self applyVisibility];}
@@ -331,63 +342,76 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     NSAlert *alert=[NSAlert new];alert.messageText=title;alert.informativeText=detail;[alert addButtonWithTitle:@"OK"];
     [NSApp activateIgnoringOtherApps:YES];[alert runModal];
 }
+- (void)activateMenuForIdentifier:(NSString *)identifier pid:(pid_t)pid before:(NSArray *)before metadata:(NSDictionary *)metadata revision:(NSUInteger)revision started:(NSTimeInterval)started {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        // The host's acknowledgement precedes layout on some OS builds. Probe
+        // immediately, then wait only while the selected control is unavailable
+        // or moving. Never repeat a press, even when its reply times out.
+        NSArray *targets=@[];NSValue *previousRect=nil;id previousTarget=nil;
+        NSTimeInterval deadline=NSProcessInfo.processInfo.systemUptime+2.2;
+        BOOL stable=NO;NSUInteger probes=0;
+        while(NSProcessInfo.processInfo.systemUptime<deadline){
+            if(revision!=self.interactionGeneration)return;
+            targets=MBMenuTargets(pid,before,metadata);probes++;
+            if(targets.count>1)break;
+            NSValue *rect=targets.count==1?MBMenuTargetScreenRect(targets.firstObject):nil;
+            stable=rect && previousRect && [rect isEqual:previousRect] && MBAXSameElement(targets.firstObject,previousTarget);
+            if(stable)break;
+            previousRect=rect;previousTarget=targets.firstObject;
+            [NSThread sleepForTimeInterval:probes<4?0.04:0.1];
+        }
+        dispatch_async(dispatch_get_main_queue(),^{
+            if(revision!=self.interactionGeneration)return;
+            if(!stable){
+                [self finishInteraction];[self showMenuError:@"Could not open this menu" detail:targets.count>1?@"This app exposes multiple menu controls. Direct selection is not available yet.":@"The menu-bar host did not expose a stable matching control. The item has been hidden again."];return;
+            }
+            [self log:[NSString stringWithFormat:@"MENU ready %@ after %.0f ms (%lu probes)",identifier,(NSProcessInfo.processInfo.systemUptime-started)*1000,(unsigned long)probes]];
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                if(revision!=self.interactionGeneration)return;
+                AXError result=[identifier isEqual:IStatID]?MBClickMenuTarget((__bridge AXUIElementRef)targets.firstObject):MBPressMenuTarget(targets.firstObject);
+                dispatch_async(dispatch_get_main_queue(),^{
+                    if(revision!=self.interactionGeneration)return;
+                    [self log:[NSString stringWithFormat:@"MENU activation result=%d for %@ after %.0f ms",result,identifier,(NSProcessInfo.processInfo.systemUptime-started)*1000]];
+                    if(result!=kAXErrorSuccess && result!=kAXErrorCannotComplete){
+                        [self finishInteraction];[self showMenuError:@"Could not open this menu" detail:@"The app declined the Accessibility menu request."];return;
+                    }
+                    self.interactionTimer=[NSTimer scheduledTimerWithTimeInterval:30 repeats:NO block:^(NSTimer *timer){[self finishInteraction];}];
+                    self.outsideMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp|NSEventMaskRightMouseUp|NSEventMaskKeyDown handler:^(NSEvent *event){
+                        if(event.type==NSEventTypeKeyDown && event.keyCode!=53)return;
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,400*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(revision==self.interactionGeneration)[self finishInteraction];});
+                    }];
+                });
+            });
+        });
+    });
+}
 - (void)openHiddenMenu:(NSButton *)sender {
     if(!AXIsProcessTrusted()){
         [self.overflow performClose:nil];[self requestMenuAccess:nil];
-        [self showMenuError:@"macOS has not granted this build access" detail:@"If MenuBarCompact is already enabled in Device Control and Data Access, remove its old entry and add /Applications/MenuBarCompact.app again. This update uses a consistent developer signature so later builds can retain the grant."];
-        return;
+        [self showMenuError:@"macOS has not granted this build access" detail:@"If MenuBarCompact is already enabled in Device Control and Data Access, remove its old entry and add /Applications/MenuBarCompact.app again. This update uses a consistent developer signature so later builds can retain the grant."];return;
     }
+    NSTimeInterval started=NSProcessInfo.processInfo.systemUptime;
     NSString *identifier=sender.identifier;
-    NSDictionary *systemMetadata=[identifier isEqual:IStatID]?@{@"preferHost":@YES}:MBSystemItems()[identifier];
+    NSDictionary *metadata=[identifier isEqual:IStatID]?@{@"preferHost":@YES}:MBSystemItems()[identifier];
     [self finishInteraction];[self.rehideTimer invalidate];
     NSUInteger revision=self.interactionGeneration;
     pid_t pid=self.running[identifier].processIdentifier;
-    if([systemMetadata[@"hostBundle"] length])pid=self.running[systemMetadata[@"hostBundle"]].processIdentifier;
+    if([metadata[@"hostBundle"] length])pid=self.running[metadata[@"hostBundle"]].processIdentifier;
     if([identifier isEqual:@"system.input-method"])pid=self.running[@"com.apple.TextInputMenuAgent"].processIdentifier;
+    [self.overflow performClose:nil];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         NSArray *before=MBHostButtons();
         dispatch_async(dispatch_get_main_queue(),^{
             if(revision!=self.interactionGeneration)return;
-            self.activeItem=identifier;[self applyVisibility];
-            [self.overflow performClose:nil];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,700*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-                if(revision!=self.interactionGeneration)return;
-                NSArray *targets=MBMenuTargets(pid,before,systemMetadata);
-                // Hosted controls can arrive after the allowlist completion.
-                // Retry discovery only; never repeat a press that may succeed.
-                for(NSUInteger attempt=0;!targets.count && attempt<10;attempt++){
-                    if(revision!=self.interactionGeneration)return;
-                    [NSThread sleepForTimeInterval:0.15];
-                    targets=MBMenuTargets(pid,before,systemMetadata);
-                }
-                if(!targets.count){NSMutableArray *identities=[NSMutableArray new];for(id item in MBHostButtons())[identities addObject:MBAXIdentity(item)];[self log:[NSString stringWithFormat:@"MENU discovery %@ host=%@",identifier,identities]];}
-                dispatch_async(dispatch_get_main_queue(),^{
-                    if(revision!=self.interactionGeneration)return;
-                    if(targets.count!=1){
-                        [self finishInteraction];[self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:targets.count?@"This app exposes multiple menu controls. Direct selection is not available yet.":@"The menu-bar host did not expose a matching control. The item has been hidden again."];
-                        [self.rehideTimer invalidate];[self log:[NSString stringWithFormat:@"MENU unresolved %@ candidates=%lu",identifier,(unsigned long)targets.count]];return;
-                    }
-                    [self log:[NSString stringWithFormat:@"MENU activating %@; only this item is temporarily visible",identifier]];
-                    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-                        if(revision!=self.interactionGeneration)return;
-                        // iStat rejects AXPress even on the host; activate its verified
-                        // status-item geometry directly, without first issuing an AX press.
-                        AXError result=[identifier isEqual:IStatID]?MBClickMenuTarget((__bridge AXUIElementRef)targets.firstObject):MBPressMenuTarget(targets.firstObject);
-                        dispatch_async(dispatch_get_main_queue(),^{
-                            if(revision!=self.interactionGeneration)return;
-                            [self log:[NSString stringWithFormat:@"MENU activation result=%d for %@",result,identifier]];
-                            if(result!=kAXErrorSuccess && result!=kAXErrorCannotComplete){
-                                [self finishInteraction];[self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:@"The app declined the Accessibility menu request."];return;
-                            }
-                            self.interactionTimer=[NSTimer scheduledTimerWithTimeInterval:30 repeats:NO block:^(NSTimer *timer){[self finishInteraction];}];
-                            self.outsideMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp|NSEventMaskRightMouseUp|NSEventMaskKeyDown handler:^(NSEvent *event){
-                                if(event.type==NSEventTypeKeyDown && event.keyCode!=53)return;
-                                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,400*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(revision==self.interactionGeneration)[self finishInteraction];});
-                            }];
-                        });
-                    });
-                });
-            });
+            self.activeItem=identifier;
+            __weak MenuBarCompact *weakSelf=self;
+            self.visibilityReadyHandler=^(BOOL success){
+                MenuBarCompact *owner=weakSelf;
+                if(!owner || revision!=owner.interactionGeneration)return;
+                if(!success){[owner finishInteraction];[owner showMenuError:@"Could not reveal this item" detail:@"The menu-bar host did not accept the visibility change. Try opening the panel again."];return;}
+                [owner activateMenuForIdentifier:identifier pid:pid before:before metadata:metadata revision:revision started:started];
+            };
+            [self applyVisibility];
         });
     });
 }
@@ -516,7 +540,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.3 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.6.4 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self.window makeKeyAndOrderFront:nil];[self refreshApps];[self updateUI];[self updateLoginUI];[NSApp activateIgnoringOtherApps:YES];}
