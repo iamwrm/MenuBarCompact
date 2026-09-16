@@ -7,6 +7,7 @@ MenuBarCompact is an experimental AppKit application with per-app visibility rul
 ## Features
 
 - **Always show**, **Hide**, and **Always hide** rules for application bundles.
+- The same visibility choices for **Battery**, **Input Method**, and **Spotlight**.
 - Click the menu-bar button to reveal or hide apps; Option-click to show everything.
 - Optional automatic re-hiding after 15 seconds.
 - Searchable settings, with an option to show all running apps.
@@ -50,7 +51,9 @@ Right-click the menu-bar button for Settings and quick controls. Reopening the a
 
 Settings initially shows configured apps and iStat. Turn on **Show all running apps** to configure another app. Some apps use a separate menu-bar helper: Box's menu item, for example, belongs to **Box UI**. The expanded list can include processes without menu items; changing those has no visible effect.
 
-macOS system items and iStat are protected from hiding in this version.
+Battery, Input Method, and Spotlight always appear in Settings, including when hidden. They default to Always show until configured. iStat and the remaining macOS system items are protected from hiding.
+
+System-item rules are temporary visibility restrictions: they do not change the selected input source, disable Spotlight search, or edit macOS's menu-bar preferences. Battery uses its system category; Input Method uses the keyboard category and input-menu agent; Spotlight handles both known host app identities. Normal reveal restores items marked Hide, and Show everything also restores those marked Always hide.
 
 ## iStat Menus compatibility
 
@@ -79,22 +82,25 @@ Inactive copies and backups are retained. Restoring the original helper location
 ## Development and validation
 
 - `main.m`: native UI, persisted rules, menu-bar control, lifecycle handling, and login registration.
+- `VisibilityPolicy.h`: shared app/system allowlist construction and protected-item rules.
 - `istat_workaround.py`: compatibility detection, installation, status, rollback, and legacy-state migration.
 - `tests/test_workaround.py`: isolated tests that do not modify real applications or launch services.
 
 ```sh
-/usr/bin/python3 -m unittest discover -s tests -v
+./tests/run.sh
 ```
 
 Local validation covered hiding/revealing with iStat retained, automatic re-hiding, rule persistence, quitting/relaunching, and conflict handling with Thaw. Menu-bar presence was checked through macOS accessibility; that does not verify every rendered meter or interaction. An actual logout/login, sleep/wake cycle, and multiple-display behavior have not been comprehensively tested.
 
 The compatibility tests cover unchanged copies, executable updates, resource-only updates, absent installations, unexpected helper paths, rollback preservation, and legacy migration.
 
+Native visibility-policy tests also cover system-only activation, independent Battery changes, Input Method and Spotlight identities, protected items, and both reveal modes. Battery and Spotlight hide/reveal behavior was checked live on macOS 27; the input-menu control is unlabeled in the host's accessibility tree, limiting automated identification.
+
 Logs stay local at `~/Library/Application Support/MenuBarCompact/events.log`. Preferences use `io.github.iamwrm.MenuBarCompact`. Local logs, screenshots, build products, and user settings are excluded from the repository. There is no telemetry or network service.
 
 ## Current limitations
 
-Visibility is per app bundle, not per individual icon. Drag-to-reorder layouts, hover/scroll reveal, global hotkeys, and an overflow panel are not implemented. Revealed icons can still overflow a crowded or notched menu bar.
+Third-party visibility is per app bundle, not per individual icon. The three supported system controls have separate rules. Drag-to-reorder layouts, hover/scroll reveal, global hotkeys, and an overflow panel are not implemented. Revealed icons can still overflow a crowded or notched menu bar.
 
 The menu-bar API is loaded dynamically and checked at runtime. The implementation does not require a private entitlement or changes to OS security settings. There is no dependency on Thaw's binary or source code.
 

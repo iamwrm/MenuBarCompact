@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <ServiceManagement/ServiceManagement.h>
 #import <dlfcn.h>
+#import "VisibilityPolicy.h"
 
 // Narrow macOS 27 runtime interface, reconstructed in our diagnostic project.
 // Runtime lookup lets the app fail open if a future OS removes this API.
@@ -27,7 +28,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 @property NSArray<NSDictionary *> *rows;
 @property NSDictionary<NSString *,NSRunningApplication *> *running;
 @property id assertion;
-@property NSArray *lastAllowlist;
+@property NSArray *lastAllowlist, *lastSystemAllowlist;
 @property NSTimer *rehideTimer, *maintenance, *processWatch;
 @property NSTask *compatibilityTask;
 @property NSUInteger generation, refreshGeneration;
@@ -45,7 +46,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     if(file){[file seekToEndOfFile];[file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];[file closeFile];}
 }
 - (BOOL)protectedID:(NSString *)identifier {
-    return [identifier hasPrefix:@"com.apple."] || [identifier isEqual:OwnID] || [identifier hasPrefix:@"com.bjango.istatmenus"] || [identifier isEqual:ThawID];
+    return MBProtectedBundle(identifier,OwnID);
 }
 - (void)saveRules {
     [NSUserDefaults.standardUserDefaults setObject:self.rules forKey:@"VisibilityRules"];
@@ -112,7 +113,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.1.0"];
+    [self log:@"START MenuBarCompact 0.2.0"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -142,6 +143,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 - (void)rebuildRows {
     NSMutableSet *ids=[NSMutableSet setWithArray:self.rules.allKeys];
     [ids addObject:IStatID];
+    [ids addObjectsFromArray:MBSystemItems().allKeys];
     for(NSRunningApplication *app in self.running.allValues){
         if(self.allAppsButton.state==NSControlStateValueOn && ![self protectedID:app.bundleIdentifier] && (app.activationPolicy!=NSApplicationActivationPolicyProhibited || self.rules[app.bundleIdentifier]))[ids addObject:app.bundleIdentifier];
     }
@@ -151,6 +153,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         NSString *name=self.names[identifier];
         if(!name){NSURL *url=[NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:identifier];name=url?[[NSFileManager.defaultManager displayNameAtPath:url.path] stringByDeletingPathExtension]:identifier;}
         if([identifier isEqual:IStatID])name=@"iStat Menus";
+        if(MBSystemItems()[identifier])name=MBSystemItems()[identifier][@"name"];
         if(query.length && [name rangeOfString:query options:NSCaseInsensitiveSearch].location==NSNotFound && [identifier rangeOfString:query options:NSCaseInsensitiveSearch].location==NSNotFound)continue;
         [rows addObject:@{@"id":identifier,@"name":name?:identifier}];
     }
@@ -160,24 +163,19 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 - (void)releaseRestriction {
     self.generation++;self.activationPending=NO;
     if(self.assertion){[self.assertion invalidate];self.assertion=nil;[self log:@"RELEASE visibility restriction"];}
-    self.lastAllowlist=nil;
+    self.lastAllowlist=nil;self.lastSystemAllowlist=nil;
 }
 - (void)applyVisibility {
     if(self.paused)return;
     if(self.running[ThawID]){[self releaseRestriction];self.stateMessage=@"Paused while Thaw is running";[self updateUI];return;}
     if(!self.ready){[self releaseRestriction];self.stateMessage=@"Waiting for iStat compatibility";[self updateUI];return;}
-    NSMutableSet *allowed=[NSMutableSet setWithArray:self.running.allKeys];
-    [allowed addObjectsFromArray:self.rules.allKeys];
-    [allowed addObjectsFromArray:@[OwnID,IStatID,@"com.bjango.istatmenus",@"com.apple.controlcenter",@"com.apple.systemuiserver",@"com.apple.MenuBarAgent",@"com.apple.Spotlight",@"com.apple.campo",@"com.apple.TextInputMenuAgent"]];
-    NSUInteger excluded=0;
-    for(NSString *identifier in self.rules){
-        NSInteger rule=self.rules[identifier].integerValue;
-        if(![self protectedID:identifier] && ((rule==1 && self.mode==Collapsed) || (rule==2 && self.mode!=Everything))){[allowed removeObject:identifier];excluded++;}
-    }
-    if(self.mode==Everything || excluded==0){[self releaseRestriction];self.stateMessage=self.mode==Everything?@"Showing all apps":@"All configured apps are visible";[self updateUI];return;}
-    NSArray *bundles=[allowed.allObjects sortedArrayUsingSelector:@selector(compare:)];
-    if(self.assertion && [bundles isEqual:self.lastAllowlist]){
-        if(!self.activationPending)self.stateMessage=self.mode==Collapsed?@"Hidden apps are tucked away":@"Showing hidden apps";
+    NSDictionary *plan=MBVisibilityPlan(self.running.allKeys,self.rules,OwnID,self.mode);
+    NSUInteger excluded=[plan[@"excluded"] unsignedIntegerValue];
+    NSArray *systems=plan[@"systems"];
+    if(self.mode==Everything || excluded==0){[self releaseRestriction];self.stateMessage=self.mode==Everything?@"Showing all items":@"All configured items are visible";[self updateUI];return;}
+    NSArray *bundles=plan[@"bundles"];
+    if(self.assertion && [bundles isEqual:self.lastAllowlist] && [systems isEqual:self.lastSystemAllowlist]){
+        if(!self.activationPending)self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";
         [self updateUI];return;
     }
     [self releaseRestriction];
@@ -186,18 +184,18 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         self.stateMessage=@"Hiding is unavailable on this macOS version";[self updateUI];return;
     }
     @try {
-        id config=[[configuration alloc] initWithAllowedSystemItems:@[@0,@1,@2,@3,@4,@5,@6,@7,@8] allowedBundleIdentifiers:bundles];
+        id config=[[configuration alloc] initWithAllowedSystemItems:systems allowedBundleIdentifiers:bundles];
         self.assertion=[assertion new];
-        if(!config || !self.assertion){[self releaseRestriction];self.stateMessage=@"Could not start hiding; all apps remain visible";[self updateUI];return;}
-        self.lastAllowlist=bundles;self.activationPending=YES;
+        if(!config || !self.assertion){[self releaseRestriction];self.stateMessage=@"Could not start hiding; all items remain visible";[self updateUI];return;}
+        self.lastAllowlist=bundles;self.lastSystemAllowlist=systems;self.activationPending=YES;
         NSUInteger revision=self.generation;
         self.stateMessage=@"Updating menu bar…";
         [self.assertion activateWithConfiguration:config completionHandler:^(NSError *error){
             dispatch_async(dispatch_get_main_queue(),^{
                 if(revision!=self.generation)return;
                 self.activationPending=NO;
-                if(error){[self releaseRestriction];self.stateMessage=@"Could not hide apps; all apps remain visible";[self log:[NSString stringWithFormat:@"ACTIVATE failed: %@",error]];}
-                else {self.stateMessage=self.mode==Collapsed?@"Hidden apps are tucked away":@"Showing hidden apps";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=allowed",(long)self.mode,(unsigned long)excluded]];}
+                if(error){[self releaseRestriction];self.stateMessage=@"Could not hide apps; all items remain visible";[self log:[NSString stringWithFormat:@"ACTIVATE failed: %@",error]];}
+                else {self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=allowed",(long)self.mode,(unsigned long)excluded]];}
                 [self updateUI];
             });
         }];
@@ -205,7 +203,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_main_queue(),^{
             if(revision==self.generation && self.activationPending){[self releaseRestriction];self.stateMessage=@"Menu bar did not respond; hiding is paused";[self updateUI];}
         });
-    } @catch(NSException *exception){[self releaseRestriction];self.stateMessage=@"Hiding is unavailable; all apps remain visible";[self log:exception.reason];}
+    } @catch(NSException *exception){[self releaseRestriction];self.stateMessage=@"Hiding is unavailable; all items remain visible";[self log:exception.reason];}
     [self updateUI];
 }
 - (void)setModeAndApply:(VisibilityMode)mode {
@@ -229,7 +227,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         NSMenu *menu=[NSMenu new];menu.delegate=self;
         NSMenuItem *state=[menu addItemWithTitle:self.stateMessage?:@"MenuBarCompact" action:nil keyEquivalent:@""];state.enabled=NO;
         [menu addItem:NSMenuItem.separatorItem];
-        for(NSArray *entry in @[@[self.mode==Collapsed?@"Show hidden apps":@"Hide apps again",NSStringFromSelector(@selector(toggle:))],@[@"Show everything",NSStringFromSelector(@selector(showAll:))],@[@"Settings…",NSStringFromSelector(@selector(showSettings:))]]){
+        for(NSArray *entry in @[@[self.mode==Collapsed?@"Show hidden items":@"Hide items again",NSStringFromSelector(@selector(toggle:))],@[@"Show everything",NSStringFromSelector(@selector(showAll:))],@[@"Settings…",NSStringFromSelector(@selector(showSettings:))]]){
             NSMenuItem *item=[menu addItemWithTitle:entry[0] action:NSSelectorFromString(entry[1]) keyEquivalent:@""];item.target=self;
         }
         [menu addItem:NSMenuItem.separatorItem];[menu addItemWithTitle:@"Quit MenuBarCompact" action:@selector(terminate:) keyEquivalent:@"q"];
@@ -274,12 +272,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self.running[ThawID] terminate];self.stateMessage=@"Waiting for Thaw to quit…";[self updateUI];
 }
 - (void)openDiagnostics:(id)sender {[NSWorkspace.sharedWorkspace openURL:self.logURL];}
-- (void)toggleAppScope:(id)sender {self.search.placeholderString=self.allAppsButton.state==NSControlStateValueOn?@"Find an app":@"Find a configured app";[self rebuildRows];}
+- (void)toggleAppScope:(id)sender {self.search.placeholderString=self.allAppsButton.state==NSControlStateValueOn?@"Find an app":@"Find a configured item";[self rebuildRows];}
 - (void)updateUI {
     self.summaryLabel.stringValue=self.stateMessage?:@"Starting…";
     self.compatibilityLabel.stringValue=self.compatibilityMessage?:@"Checking iStat…";
     self.takeOverButton.hidden=self.running[ThawID]==nil;
-    self.toggleButton.title=self.mode==Collapsed?@"Show hidden apps":@"Hide apps again";
+    self.toggleButton.title=self.mode==Collapsed?@"Show hidden items":@"Hide items again";
     NSImage *image=[NSImage imageWithSystemSymbolName:self.mode==Collapsed?@"ellipsis.circle":@"chevron.left.circle" accessibilityDescription:@"MenuBarCompact"];
     image.template=YES;self.statusItem.button.image=image;
     self.statusItem.button.toolTip=[NSString stringWithFormat:@"MenuBarCompact — %@\nClick to reveal/hide. Right-click for settings. Option-click shows everything.",self.stateMessage?:@""];
@@ -299,23 +297,23 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.window.title=@"MenuBarCompact";self.window.releasedWhenClosed=NO;
     NSTextField *title=[self label:@"A quieter menu bar." frame:NSMakeRect(28,615,740,35) size:26 secondary:NO];title.font=[NSFont systemFontOfSize:26 weight:NSFontWeightSemibold];
     self.summaryLabel=[self label:@"Starting…" frame:NSMakeRect(28,585,740,24) size:14 secondary:YES];
-    self.toggleButton=[self button:@"Show hidden apps" action:@selector(toggle:) frame:NSMakeRect(24,540,180,32)];
+    self.toggleButton=[self button:@"Show hidden items" action:@selector(toggle:) frame:NSMakeRect(24,540,180,32)];
     [self button:@"Show everything" action:@selector(showAll:) frame:NSMakeRect(210,540,160,32)];
     self.takeOverButton=[self button:@"Quit Thaw and start" action:@selector(takeOver:) frame:NSMakeRect(585,540,210,32)];
-    self.search=[[NSSearchField alloc] initWithFrame:NSMakeRect(28,493,530,30)];self.search.placeholderString=@"Find a configured app";self.search.delegate=self;[self.window.contentView addSubview:self.search];
+    self.search=[[NSSearchField alloc] initWithFrame:NSMakeRect(28,493,530,30)];self.search.placeholderString=@"Find a configured item";self.search.delegate=self;[self.window.contentView addSubview:self.search];
     self.allAppsButton=[NSButton checkboxWithTitle:@"Show all running apps" target:self action:@selector(toggleAppScope:)];self.allAppsButton.frame=NSMakeRect(580,496,214,24);[self.window.contentView addSubview:self.allAppsButton];
     NSScrollView *scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(28,188,764,294)];scroll.hasVerticalScroller=YES;scroll.borderType=NSBezelBorder;
     self.table=[[NSTableView alloc] initWithFrame:scroll.bounds];self.table.delegate=self;self.table.dataSource=self;self.table.rowHeight=54;self.table.usesAlternatingRowBackgroundColors=YES;self.table.selectionHighlightStyle=NSTableViewSelectionHighlightStyleNone;
-    for(NSArray *spec in @[@[@"app",@"App",@450],@[@"running",@"Status",@85],@[@"rule",@"Visibility",@205]]){NSTableColumn *column=[[NSTableColumn alloc] initWithIdentifier:spec[0]];column.title=spec[1];column.width=[spec[2] doubleValue];[self.table addTableColumn:column];}
+    for(NSArray *spec in @[@[@"app",@"Item",@450],@[@"running",@"Status",@85],@[@"rule",@"Visibility",@205]]){NSTableColumn *column=[[NSTableColumn alloc] initWithIdentifier:spec[0]];column.title=spec[1];column.width=[spec[2] doubleValue];[self.table addTableColumn:column];}
     scroll.documentView=self.table;[self.window.contentView addSubview:scroll];
-    [self label:@"Click reveals apps marked Hide. Show everything also reveals Always hide." frame:NSMakeRect(28,156,765,21) size:12 secondary:YES];
+    [self label:@"Click reveals items marked Hide. Show everything also reveals Always hide." frame:NSMakeRect(28,156,765,21) size:12 secondary:YES];
     self.autoHideButton=[NSButton checkboxWithTitle:@"Hide again after 15 seconds" target:self action:@selector(toggleAutoHide:)];self.autoHideButton.frame=NSMakeRect(28,122,320,24);self.autoHideButton.state=[NSUserDefaults.standardUserDefaults boolForKey:@"AutoRehide"]?1:0;[self.window.contentView addSubview:self.autoHideButton];
     self.loginButton=[NSButton checkboxWithTitle:@"Launch at login" target:self action:@selector(toggleLogin:)];self.loginButton.frame=NSMakeRect(420,122,350,24);[self.window.contentView addSubview:self.loginButton];
     self.loginLabel=[self label:@"" frame:NSMakeRect(420,96,370,22) size:11 secondary:YES];
     self.compatibilityLabel=[self label:@"" frame:NSMakeRect(28,60,760,22) size:12 secondary:YES];
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
-    [self label:@"MenuBarCompact 0.1 · per-app visibility" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.2 · apps & system items" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];[self rebuildRows];[self updateUI];
 }
 - (void)showSettings:(id)sender {if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
@@ -323,16 +321,17 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {return self.rows.count;}
 - (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)column row:(NSInteger)index {
     NSDictionary *row=self.rows[index];NSString *identifier=row[@"id"];
+    NSDictionary *system=MBSystemItems()[identifier];
     if([column.identifier isEqual:@"rule"]){
         NSPopUpButton *popup=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,10,195,30) pullsDown:NO];
         [popup addItemsWithTitles:@[@"Always show",@"Hide",@"Always hide"]];[popup selectItemAtIndex:MIN(2,MAX(0,self.rules[identifier].integerValue))];
         popup.identifier=identifier;popup.target=self;popup.action=@selector(ruleChanged:);popup.enabled=![self protectedID:identifier];popup.accessibilityLabel=[@"Visibility for " stringByAppendingString:row[@"name"]];return popup;
     }
-    if([column.identifier isEqual:@"running"]){NSView *view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,80,54)];NSTextField *state=[NSTextField labelWithString:self.running[identifier]?@"Running":@"Closed"];state.frame=NSMakeRect(0,18,80,18);state.textColor=NSColor.secondaryLabelColor;state.font=[NSFont systemFontOfSize:11];[view addSubview:state];return view;}
+    if([column.identifier isEqual:@"running"]){NSView *view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,80,54)];NSTextField *state=[NSTextField labelWithString:system?@"System":(self.running[identifier]?@"Running":@"Closed")];state.frame=NSMakeRect(0,18,80,18);state.textColor=NSColor.secondaryLabelColor;state.font=[NSFont systemFontOfSize:11];[view addSubview:state];return view;}
     NSView *view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,440,54)];
-    NSImageView *icon=[[NSImageView alloc] initWithFrame:NSMakeRect(8,11,30,30)];icon.image=self.running[identifier].icon?:[NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:nil];[view addSubview:icon];
+    NSImageView *icon=[[NSImageView alloc] initWithFrame:NSMakeRect(8,11,30,30)];icon.image=system?[NSImage imageWithSystemSymbolName:system[@"symbol"] accessibilityDescription:system[@"name"]]:(self.running[identifier].icon?:[NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:nil]);[view addSubview:icon];
     NSTextField *name=[NSTextField labelWithString:row[@"name"]];name.frame=NSMakeRect(48,28,385,20);name.font=[NSFont systemFontOfSize:13 weight:NSFontWeightMedium];[view addSubview:name];
-    NSTextField *bundle=[NSTextField labelWithString:identifier];bundle.frame=NSMakeRect(48,8,385,18);bundle.font=[NSFont systemFontOfSize:10];bundle.textColor=NSColor.secondaryLabelColor;bundle.lineBreakMode=NSLineBreakByTruncatingMiddle;[view addSubview:bundle];return view;
+    NSTextField *bundle=[NSTextField labelWithString:system?@"System menu item":identifier];bundle.frame=NSMakeRect(48,8,385,18);bundle.font=[NSFont systemFontOfSize:10];bundle.textColor=NSColor.secondaryLabelColor;bundle.lineBreakMode=NSLineBreakByTruncatingMiddle;[view addSubview:bundle];return view;
 }
 - (void)ruleChanged:(NSPopUpButton *)sender {
     if([self protectedID:sender.identifier])return;
