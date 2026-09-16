@@ -38,15 +38,15 @@ Release builds use no Apple signing certificate or notarization. macOS may requi
 
 The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
 
-Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.8`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.7.0`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
 
 To build the same package locally:
 
 ```sh
-./scripts/package-release.sh 0.6.8
+./scripts/package-release.sh 0.7.0
 ```
 
-Output: `dist/MenuBarCompact-0.6.8-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
+Output: `dist/MenuBarCompact-0.7.0-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
@@ -130,16 +130,22 @@ Inactive copies and backups are retained. Restoring the original helper location
 
 ## Development and validation
 
-- `main.m`: native UI, persisted rules, menu-bar control, lifecycle handling, and login registration.
-- `VisibilityPolicy.h`: app/system allowlists, panel filtering, and isolated temporary menu visibility.
-- `VisibilityEditor.h`: wrapping grid geometry, native icon drag sources, validated section drop targets, and drag feedback.
-- `SystemDiscovery.swift`: runtime enumeration of system category IDs and names.
-- `SystemDiscovery.h`: installed menu-extra and legacy-host discovery.
-- `SystemCatalog.h`: stable preference keys, category/plugin metadata, names, and symbols.
-- `MenuActivation.h`: bounded Accessibility discovery and menu activation.
-- `MaintenancePolicy.h`: file fingerprints, periodic audit gating, and retry backoff.
+See [Swift migration validation and measurements](docs/SWIFT_MIGRATION.md) for the 0.7.0 comparison with the previous Objective-C build.
+
+The application uses Swift and AppKit. A small Objective-C bridge catches exceptions from the undocumented menu-bar API; the iStat utility remains Python. Swift Release builds use whole-module optimization. The migration does not introduce SwiftUI, additional polling, or new visual effects.
+
+- `AppController.swift` and `main.swift`: lifecycle, persisted rules, workspace events, and application entry point.
+- `Settings.swift` and `VisibilityEditor.swift`: resizable settings, wrapping layout, and native drag-and-drop.
+- `Overflow.swift` and `MenuActivation.swift`: second-row panel, bounded Accessibility traversal, cancellation, and native menu activation.
+- `VisibilityPolicy.swift` and `VisibilityController.swift`: allowlists and asynchronous assertion handoff.
+- `RestrictionBridge.h/.m`: runtime selector checks and Objective-C exception containment.
+- `SystemDiscovery.swift` and `SystemCatalog.swift`: runtime categories, installed extras, stable preference keys, and cached metadata.
+- `Compatibility.swift` and `MaintenancePolicy.swift`: login registration, helper process, fingerprints, and audit backoff.
 - `istat_workaround.py`: compatibility detection, installation, status, rollback, and legacy-state migration.
-- `tests/test_workaround.py`: isolated tests that do not modify real applications or launch services.
+- `tests/RegressionTests.swift`: production Swift policy, lifecycle, geometry, discovery, and maintenance tests.
+- `tests/test_workaround.py`: isolated compatibility tests without changes to real applications or launch services.
+
+The parity fixture pins Objective-C commit `66eabab47f917d16c966edfde720ac5656ff4ecd` (v0.6.8). It compares 1,536 deterministic cases covering allowlists, both panels, and temporary activation, including invalid rules and retired system IDs. Regenerate the independent oracle with `python3 tests/generate_parity_fixture.py` in a clone containing that commit. Normal tests use the checked-in digest and need no Git history or network.
 
 ```sh
 ./tests/run.sh
