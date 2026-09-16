@@ -132,7 +132,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     self.maintenance.tolerance=10;
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.4"];
+    [self log:@"START MenuBarCompact 0.6.5"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -540,7 +540,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.4 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.6.5 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self.window makeKeyAndOrderFront:nil];[self refreshApps];[self updateUI];[self updateLoginUI];[NSApp activateIgnoringOtherApps:YES];}

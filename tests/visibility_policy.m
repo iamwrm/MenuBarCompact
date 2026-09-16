@@ -83,6 +83,18 @@ int main(void) {
         NSDictionary *protected=MBVisibilityPlan(running,@{@"system.clock":@1,@"system.primaryBentoBox":@2},own,0);
         Require([protected[@"excluded"] intValue]==0,@"Clock and Control Center remain protected even under saved rules");
         Require([MBSystemItems()[@"system.input-method"][@"systems"] containsObject:@4],@"Existing Input Method preferences retain their stable key");
+        // Plug-in identity and its live owner are different on macOS 27.
+        NSArray *exclusivePlugins=@[@{@"bundle":@"com.apple.menuextra.TimeMachine",@"name":@"Time Machine",@"host":@"com.apple.systemuiserver"}];
+        MBSetSystemItems(MBBuildSystemCatalog(runtime,exclusivePlugins,@[spotlight]));
+        NSDictionary *hostHidden=MBVisibilityPlan(running,@{tm:@1,@"example.hidden":@1},own,0);
+        Require(![hostHidden[@"bundles"] containsObject:@"com.apple.systemuiserver"],@"Hide must exclude the verified exclusive legacy host as well as the plug-in");
+        Require([hostHidden[@"bundles"] containsObject:@"com.apple.MenuBarAgent"] && [hostHidden[@"bundles"] containsObject:@"com.apple.controlcenter"],@"Legacy hiding must preserve the modern system hosts");
+        NSDictionary *hostRevealed=MBVisibilityPlan(running,MBInteractionRules(@{tm:@1,@"example.hidden":@1},tm),own,0);
+        Require([hostRevealed[@"bundles"] containsObject:@"com.apple.systemuiserver"] && ![hostRevealed[@"bundles"] containsObject:@"example.hidden"],@"Opening Time Machine temporarily restores its exclusive host only");
+        Require(![MBVisibilityPlan(running,@{tm:@2},own,0)[@"bundles"] containsObject:@"com.apple.systemuiserver"],@"Always Hide also excludes the verified host");
+        Require([MBVisibilityPlan(running,@{tm:@0},own,0)[@"bundles"] containsObject:@"com.apple.systemuiserver"],@"Always Show permits the host again");
+        MBSetSystemItems(MBBuildSystemCatalog(runtime,plugins,@[spotlight]));
+        Require([MBVisibilityPlan(running,@{tm:@1},own,0)[@"bundles"] containsObject:@"com.apple.systemuiserver"],@"A shared or unknown legacy host must remain visible");
         puts("Visibility policy tests passed, including panel filtering and isolated menu activation.");
     }
     return 0;

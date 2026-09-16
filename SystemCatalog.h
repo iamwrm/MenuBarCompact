@@ -33,7 +33,12 @@ static NSDictionary *MBBuildSystemCatalog(NSArray<NSDictionary *> *runtime,NSArr
         if([bundle isEqual:@"com.apple.menuextra.airport"] && catalog[@"system.wifi"])continue;
         NSString *key=[@"system.extra." stringByAppendingString:bundle];
         NSString *symbol=@{@"com.apple.menuextra.TimeMachine":@"clock.arrow.circlepath",@"com.apple.menuextra.eject":@"eject",@"com.apple.menuextra.vpn":@"network"}[bundle]?:@"menubar.rectangle";
-        catalog[key]=@{@"name":name,@"symbol":symbol,@"systems":@[],@"bundles":@[bundle],@"axIdentifiers":@[bundle],@"axName":name,@"bundlePath":plugin[@"path"]?:@"",@"hostBundle":plugin[@"host"]?:@"",@"protected":@NO,@"source":@"Installed menu extra"};
+        // Discovery supplies a host only when this is its sole loaded legacy extra.
+        // The restriction service can attribute the item to that process rather
+        // than the plug-in bundle. Never exclude a shared or unknown host.
+        NSString *host=plugin[@"host"];
+        NSArray *visibilityBundles=[host isEqual:@"com.apple.systemuiserver"]?@[bundle,host]:@[bundle];
+        catalog[key]=@{@"name":name,@"symbol":symbol,@"systems":@[],@"bundles":visibilityBundles,@"axIdentifiers":@[bundle],@"axName":name,@"bundlePath":plugin[@"path"]?:@"",@"hostBundle":plugin[@"host"]?:@"",@"protected":@NO,@"source":@"Installed menu extra"};
     }
     for(NSDictionary *item in specials)if(item[@"key"] && item[@"metadata"])catalog[item[@"key"]]=item[@"metadata"];
     return catalog;

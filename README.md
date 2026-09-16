@@ -38,15 +38,15 @@ Release builds use no Apple signing certificate or notarization. macOS may requi
 
 The **Download release** GitHub Actions workflow runs tests on the `xcode-27` runner, builds the tagged source in Release configuration with certificate signing disabled, and publishes the ZIP and checksum. No signing secrets are needed. It also retains a workflow artifact for 30 days.
 
-Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.4`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
+Update the Xcode project's `MARKETING_VERSION` and build number, commit and push, then push a matching version tag such as `v0.6.5`. The tag version must match the app version or packaging fails. The workflow can also be started manually with an existing tag. Published releases are not overwritten; retries can finish an incomplete draft.
 
 To build the same package locally:
 
 ```sh
-./scripts/package-release.sh 0.6.4
+./scripts/package-release.sh 0.6.5
 ```
 
-Output: `dist/MenuBarCompact-0.6.4-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
+Output: `dist/MenuBarCompact-0.6.5-macOS-arm64.zip` and its checksum. This packaging path is separate from the certificate-signed local development build below.
 
 ## Build and run
 
@@ -90,7 +90,7 @@ Discovered items stay listed while hidden, and new items default to Always show.
 
 The allowlist includes all discovered plug-in bundle IDs by default, preventing discovery omissions from suppressing them. Existing Battery, Input Method, and Spotlight rule keys remain unchanged. Unknown retired synthetic keys never enter the app allowlist. If runtime enumeration fails, the app releases its visibility restriction rather than applying guessed category IDs.
 
-Discovery covers the published category API and installed `.menu` bundles, not every possible Control Center gallery module. Adding other module families can still require a separate discovery/control adapter. Discovering an item is not proof that its native menu supports external activation. A uniquely loaded legacy extra can use SystemUIServer’s menu control; ambiguous hosts fail without pressing an arbitrary menu.
+Discovery covers the published category API and installed `.menu` bundles, not every possible Control Center gallery module. Adding other module families can still require a separate discovery/control adapter. Discovering an item is not proof that its native menu supports external activation. A uniquely loaded legacy extra can use SystemUIServer’s menu control. Its visibility rule also targets that host: macOS can attribute the visible icon to SystemUIServer rather than the plug-in bundle. This fixes Time Machine remaining visible despite a Hide rule when it is the sole loaded legacy extra. When several legacy extras share the host, it remains allowed to avoid hiding unrelated controls; independent hiding may be unavailable. Ambiguous menu activation fails without pressing an arbitrary menu.
 
 System-item rules are temporary visibility restrictions: they do not change the selected input source, disable Spotlight search, or edit macOS's menu-bar preferences. Battery uses its system category; Input Method uses the keyboard category and input-menu agent; Spotlight handles both known host app identities. The panel can list these controls while they remain hidden in the main bar.
 
@@ -152,6 +152,8 @@ The three-row editor was checked with native drag gestures across all three grou
 Version 0.6.3 was checked live for Settings search, dragging iStat into Hide, and opening native Battery and iStat menus from the second row. Test rule changes were restored.
 
 Version 0.6.4 replaces the fixed activation delay with host acknowledgement and two matching geometry samples. Live checks opened Battery and iStat menus; click-to-target-ready timings on the development Mac were 184 ms and 125 ms respectively (individual samples, not guaranteed timings). Lungo and Input Method targets were ready in 92 ms and 141 ms; their AX requests timed out, so popup display timing was not established for those apps. The previous code waited 700 ms before beginning target discovery. Local diagnostics report readiness and action-return timings separately.
+
+Version 0.6.5 was checked with Time Machine as the sole loaded SystemUIServer menu extra: its host item disappeared under Hide, reappeared for second-row activation, and the menu action returned success. The native computer-use provider could not read the popup contents. Visibility tests cover exclusive-host hiding, temporary reveal, Always Show, Always Hide, preserving modern system hosts, and leaving shared/unknown hosts allowed.
 
 Visibility-transition tests use fake assertions to cover replacement handoff, waiting for acknowledgement, superseded updates, failure, timeout, stale replies, and exact-once release without changing the real menu bar.
 
