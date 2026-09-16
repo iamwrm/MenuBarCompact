@@ -22,11 +22,11 @@ int main(void) {
 
         NSDictionary *rules=@{@"system.battery":@1,@"system.input-method":@1,@"system.spotlight":@2,@"example.hidden":@1,@"com.apple.MenuBarAgent":@2,@"com.bjango.istatmenus.status":@2,own:@2};
         NSDictionary *hidden=MBVisibilityPlan(running,rules,own,0);
-        Require([hidden[@"excluded"] integerValue]==4,@"Only requested items and the ordinary app should be excluded");
+        Require([hidden[@"excluded"] integerValue]==5,@"Requested system items, iStat, and the ordinary app should be excluded");
         Require(![hidden[@"systems"] containsObject:@4],@"Input Method keyboard category must be removed");
-        for(NSString *identifier in @[@"com.apple.TextInputMenuAgent",@"com.apple.campo",@"com.apple.Spotlight",@"example.hidden"])
+        for(NSString *identifier in @[@"com.apple.TextInputMenuAgent",@"com.apple.campo",@"com.apple.Spotlight",@"example.hidden",@"com.bjango.istatmenus.status"])
             Require(![hidden[@"bundles"] containsObject:identifier],[@"Unexpected allowed item: " stringByAppendingString:identifier]);
-        for(NSString *identifier in @[own,@"com.bjango.istatmenus.status",@"com.apple.MenuBarAgent",@"com.apple.controlcenter"])
+        for(NSString *identifier in @[own,@"com.apple.MenuBarAgent",@"com.apple.controlcenter"])
             Require([hidden[@"bundles"] containsObject:identifier],[@"Protected item removed: " stringByAppendingString:identifier]);
         for(NSString *identifier in MBSystemItems())
             Require(![hidden[@"bundles"] containsObject:identifier],@"Synthetic rule keys must not reach the app allowlist");
@@ -35,7 +35,7 @@ int main(void) {
         Require([revealed[@"systems"] isEqual:baseline[@"systems"]],@"Normal reveal must restore Battery and Input Method");
         Require([revealed[@"bundles"] containsObject:@"com.apple.TextInputMenuAgent"],@"Normal reveal must restore Input Method's agent");
         Require([revealed[@"bundles"] containsObject:@"example.hidden"],@"Normal reveal must restore ordinary hidden apps");
-        Require(![revealed[@"bundles"] containsObject:@"com.apple.campo"] && [revealed[@"excluded"] integerValue]==1,@"Always-hidden Spotlight must stay hidden during normal reveal");
+        Require(![revealed[@"bundles"] containsObject:@"com.apple.campo"] && [revealed[@"excluded"] integerValue]==2,@"Always-hidden Spotlight and iStat must stay hidden during normal reveal");
 
         NSDictionary *everything=MBVisibilityPlan(running,rules,own,2);
         Require([everything[@"excluded"] integerValue]==0,@"Show everything must release all configured exclusions");
@@ -45,7 +45,7 @@ int main(void) {
         NSArray *panel=MBPanelItems(running,panelRules,own,NO);
         Require(panel.count==3 && [panel containsObject:@"example.hidden"] && [panel containsObject:@"system.battery"],@"Ordinary panel lists running hidden apps and system items only");
         NSArray *allPanel=MBPanelItems(running,panelRules,own,YES);
-        Require(allPanel.count==4 && [allPanel containsObject:@"system.spotlight"],@"Expanded panel includes Always hide without protected or closed apps");
+        Require(allPanel.count==5 && [allPanel containsObject:@"system.spotlight"] && [allPanel containsObject:@"com.bjango.istatmenus.status"],@"Expanded panel includes Always hide without protected or closed apps");
         Require([MBVisibilityPlan(running,panelRules,own,0) isEqual:MBVisibilityPlan(running,MBInteractionRules(panelRules,nil),own,0)],@"Opening the panel must not reveal anything");
         NSDictionary *one=MBVisibilityPlan(running,MBInteractionRules(rules,@"system.battery"),own,0);
         Require([one[@"systems"] containsObject:@0] && ![one[@"systems"] containsObject:@4],@"Opening Battery must not reveal Input Method");
@@ -53,6 +53,18 @@ int main(void) {
         NSDictionary *appOne=MBVisibilityPlan(running,MBInteractionRules(rules,@"example.hidden"),own,0);
         Require([appOne[@"bundles"] containsObject:@"example.hidden"] && [appOne[@"systems"] isEqual:hidden[@"systems"]],@"Opening one app must preserve hidden system controls");
         Require([rules[@"example.hidden"] isEqual:@1] && [rules[@"system.battery"] isEqual:@1],@"Temporary activation must never change saved rules");
+        NSString *istat=@"com.bjango.istatmenus.status";
+        Require(!MBProtectedBundle(istat,own),@"iStat must accept all visibility choices");
+        Require([baseline[@"bundles"] containsObject:istat],@"iStat remains visible by default");
+        NSDictionary *istatRules=@{istat:@1,@"example.hidden":@1};
+        Require(![MBVisibilityPlan(running,istatRules,own,0)[@"bundles"] containsObject:istat],@"Hide must exclude the iStat status helper");
+        Require([MBPanelItems(running,istatRules,own,NO) containsObject:istat],@"Hidden iStat must appear in the normal second row");
+        Require(![MBPanelItems(running,@{istat:@2},own,NO) containsObject:istat],@"Always-hidden iStat must stay out of the normal second row");
+        Require([MBPanelItems(running,@{istat:@2},own,YES) containsObject:istat],@"Option-click must include always-hidden iStat");
+        NSDictionary *istatActive=MBVisibilityPlan(running,MBInteractionRules(istatRules,istat),own,0);
+        Require([istatActive[@"bundles"] containsObject:istat] && ![istatActive[@"bundles"] containsObject:@"example.hidden"],@"Opening iStat must only temporarily reveal its helper");
+        Require([istatRules[istat] isEqual:@1],@"Opening iStat must preserve the saved Hide rule");
+        Require([MBVisibilityPlan(running,@{istat:@0},own,0)[@"bundles"] containsObject:istat],@"Always Show must restore the iStat helper");
         [runtime addObject:@{@"token":@"futureWidget",@"raw":@42}];
         NSArray *plugins=@[@{@"bundle":@"com.apple.menuextra.TimeMachine",@"name":@"Time Machine",@"path":@"/fixture/TimeMachine.menu"},@{@"bundle":@"com.apple.menuextra.NewExtra",@"name":@"New Extra"}];
         MBSetSystemItems(MBBuildSystemCatalog(runtime,plugins,@[spotlight]));

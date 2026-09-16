@@ -126,7 +126,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [NSRunLoop.mainRunLoop addTimer:self.processWatch forMode:NSRunLoopCommonModes];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--enable-login"])[self setLoginEnabled:YES];
     if(first || [NSProcessInfo.processInfo.arguments containsObject:@"--settings"])[self showSettings:nil];
-    [self log:@"START MenuBarCompact 0.6.1"];
+    [self log:@"START MenuBarCompact 0.6.2"];
 }
 - (void)workspaceChanged:(NSNotification *)note {
     if([note.name isEqual:NSWorkspaceDidWakeNotification] || [note.name isEqual:NSWorkspaceSessionDidBecomeActiveNotification]){
@@ -220,7 +220,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
                 if(revision!=self.generation)return;
                 self.activationPending=NO;
                 if(error){[self releaseRestriction];self.stateMessage=@"Could not hide apps; all items remain visible";[self log:[NSString stringWithFormat:@"ACTIVATE failed: %@",error]];}
-                else {self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=allowed",(long)self.mode,(unsigned long)excluded]];}
+                else {self.stateMessage=self.mode==Collapsed?@"Hidden items are tucked away":@"Showing hidden items";[self log:[NSString stringWithFormat:@"ACTIVATE success mode=%ld excluded=%lu iStat=%@",(long)self.mode,(unsigned long)excluded,[bundles containsObject:IStatID]?@"allowed":@"hidden"]];}
                 [self updateUI];
             });
         }];
@@ -323,7 +323,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
         return;
     }
     NSString *identifier=sender.identifier;
-    NSDictionary *systemMetadata=MBSystemItems()[identifier];
+    NSDictionary *systemMetadata=[identifier isEqual:IStatID]?@{@"preferHost":@YES}:MBSystemItems()[identifier];
     [self finishInteraction];[self.rehideTimer invalidate];
     NSUInteger revision=self.interactionGeneration;
     pid_t pid=self.running[identifier].processIdentifier;
@@ -353,10 +353,12 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
                     }
                     [self log:[NSString stringWithFormat:@"MENU activating %@; only this item is temporarily visible",identifier]];
                     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-                        AXError result=MBPressMenuTarget(targets.firstObject);
+                        // iStat rejects AXPress even on the host; activate its verified
+                        // status-item geometry directly, without first issuing an AX press.
+                        AXError result=[identifier isEqual:IStatID]?MBClickMenuTarget((__bridge AXUIElementRef)targets.firstObject):MBPressMenuTarget(targets.firstObject);
                         dispatch_async(dispatch_get_main_queue(),^{
                             if(revision!=self.interactionGeneration)return;
-                            [self log:[NSString stringWithFormat:@"MENU AX result=%d for %@",result,identifier]];
+                            [self log:[NSString stringWithFormat:@"MENU activation result=%d for %@",result,identifier]];
                             if(result!=kAXErrorSuccess && result!=kAXErrorCannotComplete){
                                 [self finishInteraction];[self openOverflowIncludingAlwaysHidden:self.includeAlwaysHidden];[self.overflow performClose:nil];[self showMenuError:@"Could not open this menu" detail:@"The app declined the Accessibility menu request."];return;
                             }
@@ -472,7 +474,7 @@ static NSString *const IStatID = @"com.bjango.istatmenus.status";
     [self button:@"Check iStat" action:@selector(checkCompatibility:) frame:NSMakeRect(23,18,120,30)];
     [self button:@"Diagnostics…" action:@selector(openDiagnostics:) frame:NSMakeRect(150,18,145,30)];
     [self button:@"Rescan system items" action:@selector(discoverSystemItems:) frame:NSMakeRect(300,18,180,30)];
-    [self label:@"MenuBarCompact 0.6.1 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
+    [self label:@"MenuBarCompact 0.6.2 · drag to organize" frame:NSMakeRect(525,23,270,22) size:11 secondary:YES];
     [self.window center];[self rebuildRows];[self renderVisibilityLanes];[self updateUI];
 }
 - (void)showSettings:(id)sender {[self.overflow performClose:nil];if(!self.window)[self buildWindow];[self refreshApps];[self updateUI];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}

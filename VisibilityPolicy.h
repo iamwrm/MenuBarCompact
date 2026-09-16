@@ -3,7 +3,7 @@
 #import "SystemCatalog.h"
 
 static BOOL MBProtectedBundle(NSString *identifier, NSString *ownID) {
-    return [identifier hasPrefix:@"com.apple."] || [identifier isEqual:ownID] || [identifier hasPrefix:@"com.bjango.istatmenus"] || [identifier isEqual:@"com.stonerl.Thaw"];
+    return [identifier hasPrefix:@"com.apple."] || [identifier isEqual:ownID] || [identifier isEqual:@"com.stonerl.Thaw"];
 }
 
 // mode: 0 = collapsed, 1 = reveal ordinary hidden items, 2 = show everything.

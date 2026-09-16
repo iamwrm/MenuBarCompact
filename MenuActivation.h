@@ -63,8 +63,17 @@ static NSString *MBAXIdentity(id element) {
 static BOOL MBAXSameElement(id a,id b) {return CFEqual((__bridge CFTypeRef)a,(__bridge CFTypeRef)b);}
 static NSArray *MBMenuTargets(pid_t pid,NSArray *before,NSDictionary *metadata) {
     NSArray *owned=MBAXStatusButtons(pid,NO);
-    if(owned.count)return owned;
+    if(owned.count && ![metadata[@"preferHost"] boolValue])return owned;
     NSArray *host=MBHostButtons();
+    // iStat's helper proxy rejects activation; use its matching native host
+    // control when identities agree, or the existing unambiguous reveal delta.
+    if([metadata[@"preferHost"] boolValue]){
+        NSMutableArray *hosted=[NSMutableArray new];
+        for(id element in host){NSString *identity=MBAXIdentity(element);if(!identity.length)continue;
+            for(id proxy in owned)if([identity isEqual:MBAXIdentity(proxy)]){[hosted addObject:element];break;}
+        }
+        if(hosted.count)return hosted;
+    }
     NSMutableArray *matches=[NSMutableArray new];
     for(id element in host){
         NSString *ax=MBAXValue((__bridge AXUIElementRef)element,CFSTR("AXIdentifier"));BOOL match=NO;
